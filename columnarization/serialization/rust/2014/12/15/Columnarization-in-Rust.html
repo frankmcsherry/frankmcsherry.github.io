@@ -66,7 +66,7 @@
 
 <p>The project I’ll talk about is for <strong>columnarization</strong>, a technique from the database community for laying out structured records in a format that is more convenient for serialization than the records themselves. This is important if you want to send data around in binary format at high throughputs, which is indeed something I often enjoy.</p>
 
-<p>The rough idea is that, starting from a vector of some type, or <code>Vec&lt;T&gt;</code> in rust, we want to repeatedly reduce the complexity of the type <code>T</code>, at the cost of increasing the number of vectors we have on hand. There are roughly three types of rules we’ll follow:</p>
+<p>The rough idea is that, starting from a vector of some type, or <code>Vec&lt;T&gt;</code> in Rust, we want to repeatedly reduce the complexity of the type <code>T</code>, at the cost of increasing the number of vectors we have on hand. There are roughly three types of rules we’ll follow:</p>
 
 <ol>
   <li>
