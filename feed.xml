@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://frankmcsherry.org/</link>
     <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 15 Dec 2014 18:07:48 -0800</pubDate>
-    <lastBuildDate>Mon, 15 Dec 2014 18:07:48 -0800</lastBuildDate>
+    <pubDate>Mon, 15 Dec 2014 18:08:46 -0800</pubDate>
+    <lastBuildDate>Mon, 15 Dec 2014 18:08:46 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -29,7 +29,7 @@
   &lt;/li&gt;
 &lt;/ol&gt;
 
-&lt;p&gt;These three rules, and generalizations thereof, allow us to transform vectors of fairly complex types into a sequence of vectors of simple types. These vectors of simple types are very easy to serialize and deserialize, simply casting typed vectors to and from byte vectors.&lt;/p&gt;
+&lt;p&gt;These three rules, and generalizations thereof, allow us to transform vectors of fairly complex types into a sequence of vectors of simple types. These vectors of simple types are then very easy to serialize and deserialize, simply casting typed vectors to and from byte vectors.&lt;/p&gt;
 
 &lt;h2 id=&quot;implementation&quot;&gt;Implementation&lt;/h2&gt;
 
