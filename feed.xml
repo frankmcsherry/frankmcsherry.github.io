@@ -5,13 +5,13 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://frankmcsherry.org/</link>
     <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 15 Dec 2014 17:56:07 -0800</pubDate>
-    <lastBuildDate>Mon, 15 Dec 2014 17:56:07 -0800</lastBuildDate>
+    <pubDate>Mon, 15 Dec 2014 18:05:41 -0800</pubDate>
+    <lastBuildDate>Mon, 15 Dec 2014 18:05:41 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
         <title>Columnarization in Rust</title>
-        <description>&lt;p&gt;So like everyone without a job, I’ve started to learn Rust. And like everyone who has started to learn Rust, I now feel it is very important to tell you about my experience with it.&lt;/p&gt;
+        <description>&lt;p&gt;So like everyone without a job, I’ve started to learn &lt;a href=&quot;http://www.rust-lang.org&quot;&gt;Rust&lt;/a&gt;. And like everyone who has started to learn Rust, I now feel it is very important to tell you about my experience with it.&lt;/p&gt;
 
 &lt;p&gt;The project I’ll talk about is for &lt;strong&gt;columnarization&lt;/strong&gt;, a technique from the database community for laying out structured records in a format that is more convenient for serialization than the records themselves. This is important if you want to send data around in binary format at high throughputs, which is indeed something I often enjoy.&lt;/p&gt;
 
