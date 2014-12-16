@@ -103,7 +103,11 @@
 
 <h3 id="uints-and-basic-types">uints, and basic types</h3>
 
-<p>For basic types, we have a very basic implementation of <code>ColumnarVec&lt;T&gt;</code>: we just use a <code>Vec&lt;T&gt;</code>. When records are pushed or popped, we simply use the underlying methods on <code>Vec</code>. To encode and decode, we cast the typed vector to a byte vector, or from a byte vector to typed vector, respectively.</p>
+<p>For basic types, we have a very basic implementation of <code>ColumnarVec&lt;T&gt;</code>: we just use a <code>Vec&lt;T&gt;</code>. When records are pushed or popped, we simply use the underlying methods on <code>Vec</code>.</p>
+
+<p>To <code>encode</code> we swap in an empty vector at <code>*self</code> (using <code>mem::swap</code>, which takes two mutable references), cast the swapped out vector to a <code>Vec&lt;u8&gt;</code>, and push it on to the <code>Vec&lt;Vec&lt;u8&gt;&gt;</code> stack.</p>
+
+<p>To <code>decode</code> we pop a byte vector from the stack, casting to a <code>Vec&lt;T&gt;</code>, and then assign it to <code>*self</code>. This overwrites anything currently in the <code>ColumnarVec</code>, which … perhaps is not expected behavior.</p>
 
 <h3 id="pairs-tuples-and-structs">Pairs, tuples, and structs</h3>
 
@@ -177,7 +181,7 @@
     <span class="c1">// ... encode and decode call the corresponding methods on R1 and R2 ...</span>
 <span class="p">}</span></code></pre></div>
 
-<p>This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in. </p>
+<p>This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in.</p>
 
 <h2 id="performance">Performance</h2>
 

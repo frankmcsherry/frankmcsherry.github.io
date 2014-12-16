@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://frankmcsherry.org/</link>
     <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 15 Dec 2014 18:14:00 -0800</pubDate>
-    <lastBuildDate>Mon, 15 Dec 2014 18:14:00 -0800</lastBuildDate>
+    <pubDate>Tue, 16 Dec 2014 10:35:37 -0800</pubDate>
+    <lastBuildDate>Tue, 16 Dec 2014 10:35:37 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -52,7 +52,11 @@
 
 &lt;h3 id=&quot;uints-and-basic-types&quot;&gt;uints, and basic types&lt;/h3&gt;
 
-&lt;p&gt;For basic types, we have a very basic implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;: we just use a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;. When records are pushed or popped, we simply use the underlying methods on &lt;code&gt;Vec&lt;/code&gt;. To encode and decode, we cast the typed vector to a byte vector, or from a byte vector to typed vector, respectively.&lt;/p&gt;
+&lt;p&gt;For basic types, we have a very basic implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;: we just use a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;. When records are pushed or popped, we simply use the underlying methods on &lt;code&gt;Vec&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;To &lt;code&gt;encode&lt;/code&gt; we swap in an empty vector at &lt;code&gt;*self&lt;/code&gt; (using &lt;code&gt;mem::swap&lt;/code&gt;, which takes two mutable references), cast the swapped out vector to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;, and push it on to the &lt;code&gt;Vec&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt;&lt;/code&gt; stack.&lt;/p&gt;
+
+&lt;p&gt;To &lt;code&gt;decode&lt;/code&gt; we pop a byte vector from the stack, casting to a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;, and then assign it to &lt;code&gt;*self&lt;/code&gt;. This overwrites anything currently in the &lt;code&gt;ColumnarVec&lt;/code&gt;, which … perhaps is not expected behavior.&lt;/p&gt;
 
 &lt;h3 id=&quot;pairs-tuples-and-structs&quot;&gt;Pairs, tuples, and structs&lt;/h3&gt;
 
@@ -126,7 +130,7 @@
     &lt;span class=&quot;c1&quot;&gt;// ... encode and decode call the corresponding methods on R1 and R2 ...&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 
-&lt;p&gt;This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in. &lt;/p&gt;
+&lt;p&gt;This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in.&lt;/p&gt;
 
 &lt;h2 id=&quot;performance&quot;&gt;Performance&lt;/h2&gt;
 
