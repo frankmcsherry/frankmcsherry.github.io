@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Columnarization in Rust, part 2</title>
+  <meta name="description" content="In a previous post, I introduced some work I was doing on columnarization for Rust. It’s obviously very neat, so you should go and have a read; the rest of t...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Columnarization in Rust, part 2</h1>
+    <p class="post-meta">Dec 16, 2014</p>
+  </header>
+
+  <article class="post-content">
+    <p>In a previous post, I introduced some work I was doing on columnarization for Rust. It’s obviously very neat, so you should go and have a read; the rest of this post won’t make all that much sense without it. I’m a little worried that it will be plenty confusing even with that background. :D</p>
+
+<p>Recall the trait <code>ColumnarVec</code>, used to stash values and then to encode them into binary when asked. It looks like:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">ColumnarVec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span> <span class="o">:</span> <span class="nb">Default</span>
+<span class="p">{</span>
+    <span class="k">fn</span> <span class="n">push</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">);</span>
+    <span class="k">fn</span> <span class="n">pop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">Option</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+
+    <span class="k">fn</span> <span class="n">encode</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">);</span>
+    <span class="k">fn</span> <span class="n">decode</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">);</span>
+<span class="p">}</span></code></pre></div>
+
+<p>I described a few implementations of the <code>ColumnarVec</code> trait for different types <code>T</code>, including <code>uint</code> and <code>(T1, T2)</code>. Why those two, do you ask?</p>
+
+<p>I thought I would generalize the implementation of <code>ColumnarVec&lt;uint&gt;</code> to apply for any type <code>T:Copy</code>, which is to say those types whose binary representation are a full and faithful realization of the data. They are essentially the base types for which I’m able to cast a <code>Vec&lt;T&gt;</code> to a <code>Vec&lt;u8&gt;</code>.</p>
+
+<p>I put together a general implementation, which (you guessed it) we’re about to see. Here it is:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="o">:</span><span class="n">Copy</span><span class="o">&gt;</span> <span class="n">ColumnarVec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span> <span class="k">for</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+    <span class="k">fn</span> <span class="n">push</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="o">:</span> <span class="n">T</span><span class="p">)</span> <span class="p">{</span> <span class="bp">self</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">data</span><span class="p">);</span> <span class="p">}</span>
+
+    <span class="k">fn</span> <span class="n">pop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">Option</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span> <span class="p">{</span> <span class="bp">self</span><span class="p">.</span><span class="n">pop</span><span class="p">()</span> <span class="p">}</span>
+
+    <span class="k">fn</span> <span class="n">encode</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">buffers</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">buffers</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="k">unsafe</span> <span class="p">{</span> <span class="n">to_bytes_vec</span><span class="p">(</span><span class="n">replace</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">()))</span> <span class="p">});</span>
+    <span class="p">}</span>
+
+    <span class="k">fn</span> <span class="n">decode</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">buffers</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="o">*</span><span class="bp">self</span> <span class="o">=</span> <span class="k">unsafe</span> <span class="p">{</span> <span class="n">to_typed_vec</span><span class="p">(</span><span class="n">buffers</span><span class="p">.</span><span class="n">pop</span><span class="p">().</span><span class="n">unwrap</span><span class="p">())</span> <span class="p">};</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Both <code>push</code> and <code>pop</code> are pretty simple, and <code>encode</code> and <code>decode</code> are where the business happens.</p>
+
+<p>Actually, if you reflect back on the previous post, you might notice that there wasn’t any evident encoding or decoding business; the implementations presented there only passed on calls to other <code>encode</code> and <code>decode</code> methods. Here we see what happens. Madness, to my object-orientated brain.</p>
+
+<p>I asked a few people, and apparently it is just me who has my mind blown at the idea of assigning to <code>*self</code> in a method. I don’t even think that is a thing in C#. But we certainly are doing it here, baby! The <code>replace</code> method swaps a new vector in to <code>self</code> and returns what used to be there, which we unsafely cast (code omitted due to shame, public health) to a <code>Vec&lt;u8&gt;</code>.</p>
+
+<h2 id="trouble-back-at-the-ranch">Trouble back at the ranch</h2>
+
+<p>This all works, as far as I can see. Everything checks out, except…  back in <code>main.rs</code> there is trouble.</p>
+
+<p>Up until this point, there was a unique implementation of <code>ColumnarVec&lt;T&gt;</code> for each type <code>T</code>. This meant that Rust had no problem finding an implementation when I just told it the type <code>T</code>. Now we have two implementations for <code>(uint, uint)</code>: the implementation we discussed last time based on its pair nature, and a new implementation because <code>(uint, uint)</code> implements <code>Copy</code>.*</p>
+
+<p>Now, this is not necessarily a huge problem. We have an abundance of implementations, and if you show up with a <code>Vec&lt;(uint, uint)&gt;</code> we’ll know what to do, and if you show up with a <code>(Vec&lt;uint&gt;, Vec&lt;uint&gt;)</code> we’ll also know what to do. It’s only a problem because we had previously exploited type inference to magic up the type in the first place, so we never even had to mention either of these types. Now we might be stuck asking the user to write down some disasterously complicated type for their columnarizer, because we can’t figure out which one they want.</p>
+
+<p>*: Technically <code>Copy</code> is a “kind”, not a trait. I don’t really know what this means.</p>
+
+<h2 id="frank-invents-an-antipattern">Frank invents an [anti]pattern</h2>
+
+<p>Given that I’m new to this fancy-language scene, I thought I’d make up a neat way to indicate a default <code>ColumnarVec</code> implementator for each type <code>T</code>. This would allow us to keep both implementations for <code>(uint, uint)</code>, and other copyable types. So I added the trait</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">Columnar</span><span class="o">&lt;</span><span class="n">R</span><span class="o">:</span> <span class="n">ColumnarVec</span><span class="o">&lt;</span><span class="n">Self</span><span class="o">&gt;&gt;</span> <span class="p">{</span> <span class="p">}</span></code></pre></div>
+
+<p>All this trait means is that something implementing it, say a type <code>T</code>, identifies a type <code>R</code> it likes which implements <code>ColumnarVec&lt;T&gt;</code>. It says <code>Self</code> up there, but that is the placeholder for the type’s name.</p>
+
+<p>Now we just go and implement <code>Columnar</code> for as many types as we would like, for example:</p>
+
+<p><code>impl Columnar&lt;Vec&lt;u8&gt;&gt; for u8 { }</code></p>
+
+<p>This just says that <code>u8</code> is a type that would prefer to use <code>Vec&lt;u8&gt;</code> as its default imlementation of <code>ColumnarVec&lt;u8&gt;</code>. Pretty good choice. The other examples are pretty simple too, but they start repurposing <code>T</code> and <code>R</code> to mean other things, and no one is happy.</p>
+
+<p>When it comes time to construct a specific <code>ColumnarVec</code>, we can rely on the uniqueness of a type <code>R</code> satisfying both of the constraints <code>T: Columnar&lt;R&gt;</code> <em>and</em> <code>R: ColumnarVec&lt;T&gt;</code>. Let’s see it in action:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">one_off</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">R</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span>
+<span class="n">where</span> <span class="n">T</span><span class="o">:</span> <span class="n">Columnar</span><span class="o">&lt;</span><span class="n">R</span><span class="o">&gt;</span><span class="p">,</span>
+      <span class="n">R</span><span class="o">:</span> <span class="n">ColumnarVec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">col_vec</span><span class="o">:</span> <span class="n">R</span> <span class="o">=</span> <span class="nb">Default</span><span class="o">::</span><span class="n">default</span><span class="p">();</span>
+    <span class="k">while</span> <span class="kd">let</span> <span class="nb">Some</span><span class="p">(</span><span class="n">record</span><span class="p">)</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="n">pop</span><span class="p">()</span>
+    <span class="p">{</span>
+        <span class="n">col_vec</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">record</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">output</span> <span class="o">=</span> <span class="nb">Default</span><span class="o">::</span><span class="n">default</span><span class="p">();</span>
+    <span class="k">return</span> <span class="n">col_vec</span><span class="p">.</span><span class="n">encode</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="n">output</span><span class="p">);</span>
+<span class="p">}</span></code></pre></div>
+
+<p>We’ve imposed some constraints on the types <code>T</code> and <code>R</code>. The type <code>T</code> is given to us by the input data, but we are free to find any <code>R</code> satisfying the constraints. As discussed, we’ve ensured there is but one.</p>
+
+<p>Now that we are talking about one specific type, we’ll just ask for a default instance of it, in the line</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="kd">let</span> <span class="k">mut</span> <span class="n">col_vec</span><span class="o">:</span> <span class="n">R</span> <span class="o">=</span> <span class="nb">Default</span><span class="o">::</span><span class="n">default</span><span class="p">();</span></code></pre></div>
+
+<p>We indicate the type with <code>: R</code>, even though we don’t really know what <code>R</code> will be. We then use the magic of the <code>Default</code> trait whose implementors all provide a static <code>default()</code> method returning a valid default instance of the type. You’ll notice (only now) that the definition of <code>ColumnarVec</code> above requires <code>Default</code>. It is new as of this post. Don’t look at the previous post, it is previous for a reason.</p>
+
+<p>Fortunately, the defaults for pairs and vectors and such are all totally sane (empty vectors). Rust insists on RAII (resource acquisition is initialization), which means that you never get your hands on invalid or uninitialized data. No funny constructors to call; the <code>ColumnarVec</code> is good to go. And go it does!</p>
+
+<p>Notice that I’ve also used <code>default</code> to get an initialized <code>Vec&lt;Vec&lt;u8&gt;&gt;</code>, only I didn’t have to put in the type because there is only one type that <code>encode</code> accepts!</p>
+
+<h2 id="shameless-plug">Shameless plug</h2>
+
+<p>Because I’m sure this is going to be the Next Big Thing, I packaged what exists of columnarization in a Rust crate, and stashed it on <a href="http://crates.io">crates.io</a>. So if you are using Rust (you are at the end of a second blog post about using Rust, so let’s say “yes”), you can include it in your project by adding</p>
+
+<p><code>columnar="0.0.4"</code></p>
+
+<p>to the <code>[depedencies]</code> section of your <code>Cargo.toml</code> file. I’d love any feedback you have!</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
