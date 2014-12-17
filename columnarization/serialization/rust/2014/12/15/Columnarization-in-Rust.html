@@ -187,7 +187,7 @@
 
 <p>Measuring the performance of columnarization in Rust turned out to be harder than I expected. Mostly, coming from a managed JIT background, one could reasonably believe that only effect of an optimizing compiler was to randomize line numbers. Rust and LLVM are a fair bit smarter and without the right test harness they wil just optimize away your program.</p>
 
-<p>The harness is in <a href="https://github.com/frankmcsherry/columnar/blob/master/src/main.rs">main.rs</a>, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations likely apply in the wild.</p>
+<p>The harness is in <a href="https://github.com/frankmcsherry/columnar/blob/master/examples/example.rs">example.rs</a>, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations likely apply in the wild.</p>
 
 <ol>
   <li>

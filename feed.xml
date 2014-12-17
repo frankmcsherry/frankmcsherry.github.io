@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://frankmcsherry.org/</link>
     <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 17 Dec 2014 06:33:50 -0800</pubDate>
-    <lastBuildDate>Wed, 17 Dec 2014 06:33:50 -0800</lastBuildDate>
+    <pubDate>Wed, 17 Dec 2014 06:50:39 -0800</pubDate>
+    <lastBuildDate>Wed, 17 Dec 2014 06:50:39 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -253,7 +253,7 @@
 
 &lt;p&gt;Measuring the performance of columnarization in Rust turned out to be harder than I expected. Mostly, coming from a managed JIT background, one could reasonably believe that only effect of an optimizing compiler was to randomize line numbers. Rust and LLVM are a fair bit smarter and without the right test harness they wil just optimize away your program.&lt;/p&gt;
 
-&lt;p&gt;The harness is in &lt;a href=&quot;https://github.com/frankmcsherry/columnar/blob/master/src/main.rs&quot;&gt;main.rs&lt;/a&gt;, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations likely apply in the wild.&lt;/p&gt;
+&lt;p&gt;The harness is in &lt;a href=&quot;https://github.com/frankmcsherry/columnar/blob/master/examples/example.rs&quot;&gt;example.rs&lt;/a&gt;, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations likely apply in the wild.&lt;/p&gt;
 
 &lt;ol&gt;
   &lt;li&gt;
