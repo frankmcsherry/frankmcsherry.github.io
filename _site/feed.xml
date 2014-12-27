@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Frank McSherry</title>
+    <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
+    <link>http://frankmcsherry.org/</link>
+    <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Sat, 27 Dec 2014 14:43:03 -0500</pubDate>
+    <lastBuildDate>Sat, 27 Dec 2014 14:43:03 -0500</lastBuildDate>
+    <generator>Jekyll v2.5.2</generator>
+    
+      <item>
+        <title>Timely dataflow reboot</title>
+        <description>&lt;p&gt;Dataflow is a popular basis for many scalable computations, because the structure of the computation is committed to in advance of the execution, and the only responsibility of workers is to react to incoming data. The primary responsibility of the host system is to deliver the data to the appropriate workers, and this is an reasonably tractable task.&lt;/p&gt;
+
+&lt;p&gt;Many practical dataflow systems need additional features beyond simple data delivery. The most immediate need is the ability to tell a worker that they have received all of the data they should expect. This allows the worker to complete their computation, issue outgoing messages, and clean up persistent state. At finer granularities, streaming dataflow systems need the ability to tell a worker when they have received all of the data for a logical subset of their input, for example the end of a logical batch for which output is required.&lt;/p&gt;
+
+&lt;h2 id=&quot;naiad-and-timely-dataflow&quot;&gt;Naiad and timely dataflow&lt;/h2&gt;
+
+&lt;p&gt;Timely dataflow is the name we used to describe &lt;a href=&quot;http://research.microsoft.com/&quot;&gt;Naiad&lt;/a&gt;’s dataflow model. The model involves a directed (possibly cyclic) graph along whose edges messages (data) flow, and a partially ordered set of timestamps that adorn each message. Each message notionally exists at a &lt;em&gt;location&lt;/em&gt; in the graph at a logical &lt;em&gt;time&lt;/em&gt;, the pair of which we referred to as a &lt;em&gt;pointstamp&lt;/em&gt;. As above, these pointstamps may have nothing to do with physical time; they often reflected progress through a stream (indicating the epoch of input data), or progress around a loop (indicating the iteration).&lt;/p&gt;
+
+&lt;p&gt;The imposition of a few structural constraints (elided) on the dataflow graph ensures a partial order on (location, timestamp) pairs. This means that for any set of pointstamps, messages at one might possibly result in the production of messages at another, but there can be no cycle among them. While the absence of a &lt;em&gt;total&lt;/em&gt; order means we cannot name an “earliest” message in our set, we can nonetheless establish a set of pointstamps that will never be seen again once we have delivered their corresponding messages.&lt;/p&gt;
+
+&lt;h3 id=&quot;tracking-progress-in-naiad&quot;&gt;Tracking progress in Naiad&lt;/h3&gt;
+
+&lt;p&gt;Naiad’s task is to maintain an understanding of which pointstamps were still in play at any time, so that each of its workers would know when they were certain to never see a given pointstamp again. There are several approaches here, I recommend the &lt;a href=&quot;http://www.vldb.org/pvldb/1/1453890.pdf&quot;&gt;Out-of-Order Processing&lt;/a&gt; paper as a good starting point. Naiad’s approach can be summarized quite easily, though.&lt;/p&gt;
+
+&lt;p&gt;Progress tracking in Naiad is essentially distributed reference counting. Each worker maintains a count for each pointstamp of the number of messages it believes are still live (reference counts). When a worker processes a message at a pointstamp, it may produce output messages at other pointstamps; it broadcasts to each worker the increments for each output pointstamp and the decrement for the input pointstamp.&lt;/p&gt;
+
+&lt;p&gt;Naiad contains several optimizations to this approach, mostly identifying times where a worker can safely accumulate reference count updates without risking stalling the system. These mostly involve noticing that it still has work to do for a decrement it might send, and should just wait until it has finished things out, as the partial information will not allow others to make progress.&lt;/p&gt;
+
+&lt;h3 id=&quot;limitations-of-naiads-approach&quot;&gt;Limitations of Naiad’s approach&lt;/h3&gt;
+
+&lt;p&gt;The timely dataflow graph Naiad manages has some structure, Naiad’s representation of it in its progress tracking logic is simply as a directed graph. Although the vertices may have different types of timestamps, they are restricted to tuples of integers of varying arity. This is due to Naiad’s need to declare a common type for pointstamps, so that they may be compared among other things. Exploiting the full generality of timely dataflow, choosing different partial orders for different subgraphs, did not seem possible in a type-safe manner in Naiad.&lt;/p&gt;
+
+&lt;h2 id=&quot;re-thinking-timely-dataflow&quot;&gt;Re-thinking timely dataflow&lt;/h2&gt;
+
+&lt;p&gt;I’ve been given some time to reflect on how differently to structure progress tracking in timely dataflow, and I’ve come up with something different and appealing. The approach models timely dataflow graphs hierarchically, where a subgraph presents upwards as a vertex to the graph layer above it, concealing implementation details and presenting a minimal (detailed soon) coordination interface.&lt;/p&gt;
+
+&lt;p&gt;It’s not fully built yet, so it is hard to say if it will be better, but it does have several appealing advantages over Naiad’s approach:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Subgraphs may augment their timestamps with any partially ordered set.&lt;/p&gt;
+
+    &lt;p&gt;While integers are still likely to be popular, this allows types like &lt;code&gt;DateTime&lt;/code&gt; at the root scope, &lt;code&gt;(uint, uint)&lt;/code&gt; priorities (faked out in Naiad), and &lt;code&gt;Vec&amp;lt;Stack&amp;gt;&lt;/code&gt; for recursive computations. It also results in not requiring dynamically allocated memory for the core timestamp types.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Subgraphs may easily coordinate among subsets of workers.&lt;/p&gt;
+
+    &lt;p&gt;This allows tighter coordination when appropriate, for example when workers on a machine want to aggregate values before transmitting them. This also allows a much simpler implementation of “impersonation”, an oft commented-out Naiad feature which accelerates coordination when it is known that some edges will not exchange data.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Subgraphs may be implemented in other languages, or on other runtimes.&lt;/p&gt;
+
+    &lt;p&gt;Our choice of C# and .NET was not especially popular, but at the same time the use of Java is largely antithetical to performant systems building. A natural compromise is to build coordination logic, and other necessary services, in a language the user isn’t expected to know, and allow them to write their application in their environment of choice.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Subgraphs coordination is decoupled from the data plane.&lt;/p&gt;
+
+    &lt;p&gt;Naiad’s design largely achieved this, but it was too convenient in its implementation to couple data transmission with progress updates. This design requires that they be initially separate, though clearly convenience layers can be built. This feature is meant to support transmission of data through other media, including distributed file systems and shared queues.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;upcoming-posts&quot;&gt;Upcoming posts&lt;/h2&gt;
+
+&lt;p&gt;My goal with this project is to see how much can be teased out of the idea of big-data system as operating system; what is the minimal set of services and features a platform needs to provide for scalable computation, without otherwise constraining the programs it runs.&lt;/p&gt;
+
+&lt;p&gt;My plan is to put out posts on a few of the related topics over the next few weeks, as progress is made. There is &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;a prototype currently up and running with the new approach&lt;/a&gt;, doing things from the mundane data-parallel &lt;code&gt;distinct()&lt;/code&gt;, to the new-and-cool subgraphs backed by external processes connected to the coordinator by just unix pipes (ok, I admit it; the external processes are in Rust too). It exchanges data over threads, but not yet over network connections, and there is a bit of tooling to make it more pleasant to use.&lt;/p&gt;
+</description>
+        <pubDate>Sat, 27 Dec 2014 09:00:00 -0500</pubDate>
+        <link>http://frankmcsherry.org/dataflow/naiad/2014/12/27/Timely-Dataflow.html</link>
+        <guid isPermaLink="true">http://frankmcsherry.org/dataflow/naiad/2014/12/27/Timely-Dataflow.html</guid>
+        
+        
+        <category>dataflow</category>
+        
+        <category>naiad</category>
+        
+      </item>
+    
+      <item>
+        <title>Columnarization in Rust, part 2</title>
+        <description>&lt;p&gt;In a previous post, I introduced some work I was doing on columnarization for Rust. It’s obviously very neat, so you should go and have a read; the rest of this post won’t make all that much sense without it. I’m a little worried that it will be plenty confusing even with that background. :D&lt;/p&gt;
+
+&lt;p&gt;Recall the trait &lt;code&gt;ColumnarVec&lt;/code&gt;, used to stash values and then to encode them into binary when asked. It looks like:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;I described a few implementations of the &lt;code&gt;ColumnarVec&lt;/code&gt; trait for different types &lt;code&gt;T&lt;/code&gt;, including &lt;code&gt;uint&lt;/code&gt; and &lt;code&gt;(T1, T2)&lt;/code&gt;. Why those two, do you ask?&lt;/p&gt;
+
+&lt;p&gt;I thought I would generalize the implementation of &lt;code&gt;ColumnarVec&amp;lt;uint&amp;gt;&lt;/code&gt; to apply for any type &lt;code&gt;T:Copy&lt;/code&gt;, which is to say those types whose binary representation are a full and faithful realization of the data. They are essentially the base types for which I’m able to cast a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;I put together a general implementation, which (you guessed it) we’re about to see. Here it is:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Copy&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;unsafe&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;to_bytes_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;replace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;unsafe&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;to_typed_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;Both &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; are pretty simple, and &lt;code&gt;encode&lt;/code&gt; and &lt;code&gt;decode&lt;/code&gt; are where the business happens.&lt;/p&gt;
+
+&lt;p&gt;Actually, if you reflect back on the previous post, you might notice that there wasn’t any evident encoding or decoding business; the implementations presented there only passed on calls to other &lt;code&gt;encode&lt;/code&gt; and &lt;code&gt;decode&lt;/code&gt; methods. Here we see what happens. Madness, to my object-orientated brain.&lt;/p&gt;
+
+&lt;p&gt;I asked a few people, and apparently it is just me who has my mind blown at the idea of assigning to &lt;code&gt;*self&lt;/code&gt; in a method. I don’t even think that is a thing in C#. But we certainly are doing it here, baby! The &lt;code&gt;replace&lt;/code&gt; method swaps a new vector in to &lt;code&gt;self&lt;/code&gt; and returns what used to be there, which we unsafely cast (code omitted due to shame, public health) to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;trouble-back-at-the-ranch&quot;&gt;Trouble back at the ranch&lt;/h2&gt;
+
+&lt;p&gt;This all works, as far as I can see. Everything checks out, except…  back in &lt;code&gt;main.rs&lt;/code&gt; there is trouble.&lt;/p&gt;
+
+&lt;p&gt;Up until this point, there was a unique implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt; for each type &lt;code&gt;T&lt;/code&gt;. This meant that Rust had no problem finding an implementation when I just told it the type &lt;code&gt;T&lt;/code&gt;. Now we have two implementations for &lt;code&gt;(uint, uint)&lt;/code&gt;: the implementation we discussed last time based on its pair nature, and a new implementation because &lt;code&gt;(uint, uint)&lt;/code&gt; implements &lt;code&gt;Copy&lt;/code&gt;.*&lt;/p&gt;
+
+&lt;p&gt;Now, this is not necessarily a huge problem. We have an abundance of implementations, and if you show up with a &lt;code&gt;Vec&amp;lt;(uint, uint)&amp;gt;&lt;/code&gt; we’ll know what to do, and if you show up with a &lt;code&gt;(Vec&amp;lt;uint&amp;gt;, Vec&amp;lt;uint&amp;gt;)&lt;/code&gt; we’ll also know what to do. It’s only a problem because we had previously exploited type inference to magic up the type in the first place, so we never even had to mention either of these types. Now we might be stuck asking the user to write down some disasterously complicated type for their columnarizer, because we can’t figure out which one they want.&lt;/p&gt;
+
+&lt;p&gt;*: Technically &lt;code&gt;Copy&lt;/code&gt; is a “kind”, not a trait. I don’t really know what this means.&lt;/p&gt;
+
+&lt;h2 id=&quot;frank-invents-an-antipattern&quot;&gt;Frank invents an [anti]pattern&lt;/h2&gt;
+
+&lt;p&gt;Given that I’m new to this fancy-language scene, I thought I’d make up a neat way to indicate a default &lt;code&gt;ColumnarVec&lt;/code&gt; implementator for each type &lt;code&gt;T&lt;/code&gt;. This would allow us to keep both implementations for &lt;code&gt;(uint, uint)&lt;/code&gt;, and other copyable types. So I added the trait&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Columnar&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Self&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;All this trait means is that something implementing it, say a type &lt;code&gt;T&lt;/code&gt;, identifies a type &lt;code&gt;R&lt;/code&gt; it likes which implements &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. It says &lt;code&gt;Self&lt;/code&gt; up there, but that is the placeholder for the type’s name.&lt;/p&gt;
+
+&lt;p&gt;Now we just go and implement &lt;code&gt;Columnar&lt;/code&gt; for as many types as we would like, for example:&lt;/p&gt;
+
+&lt;p&gt;&lt;code&gt;impl Columnar&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt; for u8 { }&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;This just says that &lt;code&gt;u8&lt;/code&gt; is a type that would prefer to use &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt; as its default imlementation of &lt;code&gt;ColumnarVec&amp;lt;u8&amp;gt;&lt;/code&gt;. Pretty good choice. The other examples are pretty simple too, but they start repurposing &lt;code&gt;T&lt;/code&gt; and &lt;code&gt;R&lt;/code&gt; to mean other things, and no one is happy.&lt;/p&gt;
+
+&lt;p&gt;When it comes time to construct a specific &lt;code&gt;ColumnarVec&lt;/code&gt;, we can rely on the uniqueness of a type &lt;code&gt;R&lt;/code&gt; satisfying both of the constraints &lt;code&gt;T: Columnar&amp;lt;R&amp;gt;&lt;/code&gt; &lt;em&gt;and&lt;/em&gt; &lt;code&gt;R: ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. Let’s see it in action:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;one_off&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Columnar&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;We’ve imposed some constraints on the types &lt;code&gt;T&lt;/code&gt; and &lt;code&gt;R&lt;/code&gt;. The type &lt;code&gt;T&lt;/code&gt; is given to us by the input data, but we are free to find any &lt;code&gt;R&lt;/code&gt; satisfying the constraints. As discussed, we’ve ensured there is but one.&lt;/p&gt;
+
+&lt;p&gt;Now that we are talking about one specific type, we’ll just ask for a default instance of it, in the line&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;We indicate the type with &lt;code&gt;: R&lt;/code&gt;, even though we don’t really know what &lt;code&gt;R&lt;/code&gt; will be. We then use the magic of the &lt;code&gt;Default&lt;/code&gt; trait whose implementors all provide a static &lt;code&gt;default()&lt;/code&gt; method returning a valid default instance of the type. You’ll notice (only now) that the definition of &lt;code&gt;ColumnarVec&lt;/code&gt; above requires &lt;code&gt;Default&lt;/code&gt;. It is new as of this post. Don’t look at the previous post, it is previous for a reason.&lt;/p&gt;
+
+&lt;p&gt;Fortunately, the defaults for pairs and vectors and such are all totally sane (empty vectors). Rust insists on RAII (resource acquisition is initialization), which means that you never get your hands on invalid or uninitialized data. No funny constructors to call; the &lt;code&gt;ColumnarVec&lt;/code&gt; is good to go. And go it does!&lt;/p&gt;
+
+&lt;p&gt;Notice that I’ve also used &lt;code&gt;default&lt;/code&gt; to get an initialized &lt;code&gt;Vec&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt;&lt;/code&gt;, only I didn’t have to put in the type because there is only one type that &lt;code&gt;encode&lt;/code&gt; accepts!&lt;/p&gt;
+
+&lt;h2 id=&quot;shameless-plug&quot;&gt;Shameless plug&lt;/h2&gt;
+
+&lt;p&gt;Because I’m sure this is going to be the Next Big Thing, I packaged what exists of columnarization in a Rust crate, and stashed it on &lt;a href=&quot;http://crates.io&quot;&gt;crates.io&lt;/a&gt;. So if you are using Rust (you are at the end of a second blog post about using Rust, so let’s say “yes”), you can include it in your project by adding&lt;/p&gt;
+
+&lt;p&gt;&lt;code&gt;columnar=&quot;0.0.4&quot;&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;to the &lt;code&gt;[depedencies]&lt;/code&gt; section of your &lt;code&gt;Cargo.toml&lt;/code&gt; file. I’d love any feedback you have!&lt;/p&gt;
+</description>
+        <pubDate>Tue, 16 Dec 2014 12:00:00 -0500</pubDate>
+        <link>http://frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</link>
+        <guid isPermaLink="true">http://frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</guid>
+        
+        
+        <category>columnarization</category>
+        
+        <category>serialization</category>
+        
+        <category>rust</category>
+        
+      </item>
+    
+      <item>
+        <title>Columnarization in Rust</title>
+        <description>&lt;p&gt;So like everyone without a job, I’ve started to learn &lt;a href=&quot;http://www.rust-lang.org&quot;&gt;Rust&lt;/a&gt;. And like everyone who has started to learn Rust, I now feel it is very important to tell you about my experience with it.&lt;/p&gt;
+
+&lt;p&gt;The project I’ll talk about is for &lt;strong&gt;columnarization&lt;/strong&gt;, a technique from the database community for laying out structured records in a format that is more convenient for serialization than the records themselves. This is important if you want to send data around in binary format at high throughputs, which is indeed something I often enjoy.&lt;/p&gt;
+
+&lt;p&gt;The rough idea is that, starting from a vector of some type, or &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; in Rust, we want to repeatedly reduce the complexity of the type &lt;code&gt;T&lt;/code&gt;, at the cost of increasing the number of vectors we have on hand. There are roughly three types of rules we’ll follow:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code&gt;Vec&amp;lt;uint&amp;gt;&lt;/code&gt; A vector of base types is our base case. Do nothing.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code&gt;Vec&amp;lt;(S, T)&amp;gt;&lt;/code&gt; A vector of pairs is transformed to a pair of vectors: &lt;code&gt;(Vec&amp;lt;S&amp;gt;, Vec&amp;lt;T&amp;gt;)&lt;/code&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code&gt;Vec&amp;lt;Vec&amp;lt;T&amp;gt;&amp;gt;&lt;/code&gt; A vector of vectors goes to a pair &lt;code&gt;(Vec&amp;lt;uint&amp;gt;, Vec&amp;lt;T&amp;gt;)&lt;/code&gt;, corresponding to the original vector lengths, and their concatenated payloads.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;These three rules, and generalizations thereof, allow us to transform vectors of fairly complex types into a sequence of vectors of simple types. These vectors of simple types are then very easy to serialize and deserialize, simply casting typed vectors to and from byte vectors.&lt;/p&gt;
+
+&lt;h2 id=&quot;implementation&quot;&gt;Implementation&lt;/h2&gt;
+
+&lt;p&gt;I’ve gone and tried this out in Rust. Naturally, I won’t share the first few evolutions with you, because you might conclude that neither Rust nor Frank is much of anything you’d want to be associated with. However, the current state of the project really appeals to me, and shows off some things I don’t think I could easily do in most other languages I am familiar with.&lt;/p&gt;
+
+&lt;p&gt;For the curious, the repository can be cloned from &lt;a href=&quot;https://github.com/frankmcsherry/columnar&quot;&gt;https://github.com/frankmcsherry/columnar&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The trait (“interface”) I’ve implemented is &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;, whose role in life is to &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; records, much like a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; in Rust. That is to say, it accepts records and adds them to its columnar stash, and it can return those records when asked. This isn’t yet much more interesting than &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;, so the &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt; also adds the ability to &lt;code&gt;encode&lt;/code&gt; its contents into byte arrays, and &lt;code&gt;decode&lt;/code&gt; from byte arrays populating its contents.&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;The intended use of a &lt;code&gt;ColumnarVec&lt;/code&gt; is to repeatedly call &lt;code&gt;push&lt;/code&gt; with your favorite records, decide that you’d like to &lt;code&gt;encode&lt;/code&gt; them to binary, ship the resulting arrays to a dear friend, who is then able to &lt;code&gt;decode&lt;/code&gt; into her empty &lt;code&gt;ColumnarVec&lt;/code&gt; and read the contents out using &lt;code&gt;pop&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;uints-and-basic-types&quot;&gt;uints, and basic types&lt;/h3&gt;
+
+&lt;p&gt;For basic types, we have a very basic implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;: we just use a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;. When records are pushed or popped, we simply use the underlying methods on &lt;code&gt;Vec&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;To &lt;code&gt;encode&lt;/code&gt; we swap in an empty vector at &lt;code&gt;*self&lt;/code&gt; (using &lt;code&gt;mem::swap&lt;/code&gt;, which takes two mutable references), cast the swapped out vector to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;, and push it on to the &lt;code&gt;Vec&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt;&lt;/code&gt; stack.&lt;/p&gt;
+
+&lt;p&gt;To &lt;code&gt;decode&lt;/code&gt; we pop a byte vector from the stack, casting to a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;, and then assign it to &lt;code&gt;*self&lt;/code&gt;. This overwrites anything currently in the &lt;code&gt;ColumnarVec&lt;/code&gt;, which … perhaps is not expected behavior.&lt;/p&gt;
+
+&lt;h3 id=&quot;pairs-tuples-and-structs&quot;&gt;Pairs, tuples, and structs&lt;/h3&gt;
+
+&lt;p&gt;Pairs are a bit more interesting than base types, in that we want to destructure the pair into its component elements so that they can each be pushed into their corresponding vectors. More generally, we will only assume that the two types in the pair have implementations of &lt;code&gt;ColumnarVec&lt;/code&gt; supporting them.&lt;/p&gt;
+
+&lt;p&gt;In Rust, as well as other sophisticated languages, we can indicate that any pair of types implementing &lt;code&gt;ColumnarVec&amp;lt;T1&amp;gt;&lt;/code&gt; and &lt;code&gt;ColumnarVec&amp;lt;T2&amp;gt;&lt;/code&gt; do themselves implement &lt;code&gt;ColumnarVec&amp;lt;(T1, T2)&amp;gt;&lt;/code&gt;. We simply name the types, state the constraints, and then provide the implementation:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;// push into first ColumnarVec&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;// push into second ColumnarVec&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()))&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;One appealing part of Rust, and several other similar languages, is that one can specify an implementation in a fairly light-weight manner. Here, I’ve not even defined a new type to support the methods, I’ve just indicate that they exist for a family of pairs of two types.&lt;/p&gt;
+
+&lt;h3 id=&quot;vectors-and-collections&quot;&gt;Vectors and collections&lt;/h3&gt;
+
+&lt;p&gt;Vectors, and variable sized fields like &lt;code&gt;Option&amp;lt;T&amp;gt;&lt;/code&gt;, are where things start to get a bit sticky with columnarization. This is not only where we need to do some non-trivial re-shaping of the data, but also where we need to start dealing with dynamically allocated memory ourselves: people calling &lt;code&gt;pop&lt;/code&gt; are going to want to see some vectors in their results.&lt;/p&gt;
+
+&lt;p&gt;One of the very appealing parts of Rust is its notion of ownership of data, and this is indicated obliquely in the signature of the &lt;code&gt;push&lt;/code&gt; method. Whereas the &lt;code&gt;ColumnarVec&lt;/code&gt; itself is passed in as a reference (the &lt;code&gt;&amp;amp;mut self&lt;/code&gt; oddness), the record of type &lt;code&gt;T&lt;/code&gt; is unadorned, meaning it is the actual record and we own it now. Owning the record is great, because it means no one else owns it, and if we want to rip it in to small pieces in the name of columnarization, we are free to do so.&lt;/p&gt;
+
+&lt;p&gt;A second appealing part of owning the record is that it means we also own all of the dynamically allocated memory the record owns, for example any &lt;code&gt;Vec&lt;/code&gt; fields we might find. Obviously they hold valuable data we want to columnarize, but once that is done and the data are moved out, we can simply snag the &lt;code&gt;Vec&lt;/code&gt; and hold on to it for future use. Future use such as needing a &lt;code&gt;Vec&lt;/code&gt; when someone calls &lt;code&gt;pop&lt;/code&gt;. By stashing the vectors we can avoid much interaction with the allocator when repeatedly encoding and decoding, and that means performance.&lt;/p&gt;
+
+&lt;p&gt;Let’s look at the &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; methods for the implementation of &lt;code&gt;ColumnarVec&amp;lt;Vec&amp;lt;T&amp;gt;&amp;gt;&lt;/code&gt;. The first performs the possibly unsurprising tasks of pushing the input vector’s length into a &lt;code&gt;ColumnarVec&amp;lt;uint&amp;gt;&lt;/code&gt; and pushing its contents into a &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. Once done with the vector’s contents, it stashes the empty-but-allocated vector, which is the part that I thought was really clever. The &lt;code&gt;pop&lt;/code&gt; method runs in the opposite direction, fetching a stashed vector (or allocating if one doesn’t exist), reading the intended length, and then filling the vectors contents before returning the vector.&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+      &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;       &lt;span class=&quot;c1&quot;&gt;// once empty, stash the vector&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;// fetch or allocate a vector, then fill and return.&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap_or&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;range&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;None&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;// ... encode and decode call the corresponding methods on R1 and R2 ...&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in.&lt;/p&gt;
+
+&lt;h2 id=&quot;performance&quot;&gt;Performance&lt;/h2&gt;
+
+&lt;p&gt;Measuring the performance of columnarization in Rust turned out to be harder than I expected. Mostly, coming from a managed JIT background, one could reasonably believe that only effect of an optimizing compiler was to randomize line numbers. Rust and LLVM are a fair bit smarter and without the right test harness they wil just optimize away your program.&lt;/p&gt;
+
+&lt;p&gt;The harness is in &lt;a href=&quot;https://github.com/frankmcsherry/columnar/blob/master/examples/example.rs&quot;&gt;example.rs&lt;/a&gt;, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations will apply in the wild.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Serializing &lt;code&gt;uint&lt;/code&gt; data goes very fast, because it is just copying data and casting a pointer, if that.&lt;/p&gt;
+
+    &lt;p&gt;&lt;code&gt;Encoding/decoding at 11.24GB/s&lt;/code&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Serializing &lt;code&gt;(uint, (uint, uint))&lt;/code&gt; data goes less fast, but still quite fast:&lt;/p&gt;
+
+    &lt;p&gt;&lt;code&gt;Encoding/decoding at 5.29GB/s&lt;/code&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Serializing &lt;code&gt;Vec&amp;lt;Vec&amp;lt;uint&amp;gt;&amp;gt;&lt;/code&gt; data goes slower, due to conditional logic in the loop, but is still fast.&lt;/p&gt;
+
+    &lt;p&gt;&lt;code&gt;Encoding/decoding at 2.26GB/s&lt;/code&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;These throughputs numbers will obviously vary as the shape of the data change. Currently, working with &lt;code&gt;Option&amp;lt;T&amp;gt;&lt;/code&gt; types is slowest, due to the large ratio of conditional logic to actual bytes moved.&lt;/p&gt;
+
+&lt;p&gt;These are great numbers by my experience, and for about 150 lines of code all written in the base language (rather than code-gened nonsense), I am delighted.&lt;/p&gt;
+</description>
+        <pubDate>Mon, 15 Dec 2014 12:00:00 -0500</pubDate>
+        <link>http://frankmcsherry.org/columnarization/serialization/rust/2014/12/15/Columnarization-in-Rust.html</link>
+        <guid isPermaLink="true">http://frankmcsherry.org/columnarization/serialization/rust/2014/12/15/Columnarization-in-Rust.html</guid>
+        
+        
+        <category>columnarization</category>
+        
+        <category>serialization</category>
+        
+        <category>rust</category>
+        
+      </item>
+    
+  </channel>
+</rss>
