@@ -6,7 +6,7 @@ categories: dataflow naiad
 published: true
 ---
 
-Dataflow is a popular basis for many scalable computations, because the structure of the computation is committed to in advance of the execution, and the only responsibility of workers is to react to incoming data. The primary responsibility of the host system is to deliver the data to the appropriate workers, and this is an reasonably tractable task.
+Dataflow is a popular basis for many scalable computations, because the structure of the computation is committed to in advance of the execution, and the only responsibility of workers is to react to incoming data. The primary responsibility of the host system is to deliver the data to the appropriate workers, and this is a reasonably tractable task.
 
 Many practical dataflow systems need additional features beyond simple data delivery. The most immediate need is the ability to tell a worker that they have received all of the data they should expect. This allows the worker to complete their computation, issue outgoing messages, and clean up persistent state. At finer granularities, streaming dataflow systems need the ability to tell a worker when they have received all of the data for a logical subset of their input, for example the end of a logical batch for which output is required.
 
@@ -30,7 +30,7 @@ The timely dataflow graph Naiad manages has some structure, Naiad's representati
 
 ## Re-thinking timely dataflow
 
-I've been given some time to reflect on how differently to structure progress tracking in timely dataflow, and I've come up with something different and appealing. The approach models timely dataflow graphs hierarchically, where a subgraph presents upwards as a vertex to the graph layer above it, concealing implementation details and presenting a minimal (detailed soon) coordination interface.
+I've been given some time to reflect on how to structure progress tracking in timely dataflow, and I've come up with something different and appealing. The approach models timely dataflow graphs hierarchically, where a subgraph presents upwards as a vertex to the graph layer above it, concealing implementation details and presenting a minimal (detailed soon) coordination interface.
 
 It's not fully built yet, so it is hard to say if it will be better, but it does have several appealing advantages over Naiad's approach:
 
