@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://frankmcsherry.org/</link>
     <atom:link href="http://frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 27 Dec 2014 19:59:52 -0500</pubDate>
-    <lastBuildDate>Sat, 27 Dec 2014 19:59:52 -0500</lastBuildDate>
+    <pubDate>Sat, 27 Dec 2014 20:21:00 -0500</pubDate>
+    <lastBuildDate>Sat, 27 Dec 2014 20:21:00 -0500</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -56,7 +56,7 @@
     &lt;p&gt;Our choice of C# and .NET was not especially popular, but at the same time the use of Java is largely antithetical to performant systems building. A natural compromise is to build coordination logic, and other necessary services, in a language the user isn’t expected to know, and allow them to write their application in their environment of choice.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Subgraphs coordination is decoupled from the data plane.&lt;/p&gt;
+    &lt;p&gt;Subgraphs may coordinate without involving the data plane.&lt;/p&gt;
 
     &lt;p&gt;Naiad’s design largely achieved this, but it was too convenient in its implementation to couple data transmission with progress updates. This design requires that they be initially separate, though clearly convenience layers can be built. This feature is meant to support transmission of data through other media, including distributed file systems and shared queues.&lt;/p&gt;
   &lt;/li&gt;

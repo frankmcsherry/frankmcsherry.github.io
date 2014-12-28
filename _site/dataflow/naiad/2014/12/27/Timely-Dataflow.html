@@ -107,7 +107,7 @@
     <p>Our choice of C# and .NET was not especially popular, but at the same time the use of Java is largely antithetical to performant systems building. A natural compromise is to build coordination logic, and other necessary services, in a language the user isn’t expected to know, and allow them to write their application in their environment of choice.</p>
   </li>
   <li>
-    <p>Subgraphs coordination is decoupled from the data plane.</p>
+    <p>Subgraphs may coordinate without involving the data plane.</p>
 
     <p>Naiad’s design largely achieved this, but it was too convenient in its implementation to couple data transmission with progress updates. This design requires that they be initially separate, though clearly convenience layers can be built. This feature is meant to support transmission of data through other media, including distributed file systems and shared queues.</p>
   </li>
