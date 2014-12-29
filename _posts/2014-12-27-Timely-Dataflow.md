@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Timely dataflow reboot"
+title:  "Timely dataflow: reboot"
 date:   2014-12-27 14:00:00
 categories: dataflow naiad
 published: true

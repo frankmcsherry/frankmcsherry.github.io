@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Timely dataflow: core concepts</title>
+  <meta name="description" content="This is the second post in a series on timely dataflow. The first post overviewed some of the context for timely dataflow, and suggestions at new directions....">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/dataflow/naiad/2014/12/29/TD_time_summaries.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Timely dataflow: core concepts</h1>
+    <p class="post-meta">Dec 29, 2014</p>
+  </header>
+
+  <article class="post-content">
+    <p>This is the second post in a series on timely dataflow. The first post overviewed some of the context for timely dataflow, and suggestions at new directions. This post will start to detail some of the moving parts of the new hierarchical approach.</p>
+
+<p>Our plan is to organize timely dataflow graphs hierarchically, into nested <em>scopes</em>, each of which can be implemented by other timely dataflow graphs. This has several advantages, mostly due to the layer of abstraction hiding details that other parts of the outer timely dataflow graph need not know. On the other hand, we will need to think carefully about the abstraction boundary to avoid giving up precision.</p>
+
+<h2 id="approach">Approach</h2>
+
+<p>Whereas Naiad maintained a flat view of the timely dataflow graph, with counts for each (location, timestamp) pair indicating unfinished work, we will need to take a different approach. Rather than present such fine detail about where unfinished work lives to all participants, we will use the hierarchical structure to simplify the information.</p>
+
+<p>Each scope will <em>project</em> its unfinished work to its outputs, reporting for each output the timestamps at which messages might possibly emerge. As it performs work, it will communicate progress to the outer timely dataflow graph in the form of changes to the counts for (output, timestamp) pairs.</p>
+
+<p>Similarly, unfinished work and progress made elsewhere in the graph is first projected to the scopes’s inputs before it is communicated to the subgraph.</p>
+
+<h2 id="an-example">An example</h2>
+
+<p>To take an example we borrow an enormous figure from the <a href="http://research.microsoft.com/pubs/201100/naiad_sosp2013.pdf">Naiad paper</a>.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/Pointstamps.png" alt="My helpful screenshot" /></p>
+
+<p>In this example we have two contexts, or “scopes” as we’ll call them: the outer “streaming” scope and the inner “loop” scope. While the inner loop scope may progress rapidly, in the outer streaming scope vertex D only needs to be informed when some externally visible progress is made.
+Specifically, when the output of the inner loop scope will no longer produce messages bearing a specific timestamp.</p>
+
+<p>In fact, the outer streaming scope doesn’t need to know much of anything about the inner loop scope, other than it has one input and one output, and whenever it makes externally visible progress.</p>
+
+<p>Our plan is just to structure the progress tracking mechanisms along these lines, reporting progress upwards having projected out any irrelevant detail and coalesced (and often cancelled) the results.</p>
+
+<p>Generally, there are other things it will be helpful for the outer scope to know that this figure doesn’t demonstrate especially well. If the inner scope had multiple inputs and outputs, it would be helpful to know which inputs connected which outputs. If the inner scope had an exogenous source of input data, it would need to warn the outer scope to expect it.  We will sort out these details.</p>
+
+<h2 id="core-traits">Core traits</h2>
+
+<p>Three traits lie at the core of our timely dataflow approach: <code>Timestamp</code>, <code>PathSummary</code>, and <code>Scope</code>.
+Each scope has its own timestamp and path summary types, implementing the corresponding traits.</p>
+
+<h3 id="the-timestamp-trait">The Timestamp trait</h3>
+
+<p>The <code>Timestamp</code> trait represents a type suitable for use as a message timestamp. In Naiad this role was played by a sequence of unsigned integers. We plan to admit more general timestamps, but with some constraints, specifically (from the code):</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">Timestamp</span><span class="o">:</span> <span class="n">PartialOrd</span><span class="o">+</span><span class="nb">Eq</span><span class="o">+</span><span class="n">PartialEq</span><span class="o">+</span><span class="n">Copy</span><span class="o">+</span><span class="nb">Default</span><span class="o">+</span><span class="nb">Hash</span><span class="o">+</span><span class="n">Show</span><span class="o">+</span><span class="nb">Send</span><span class="o">+</span><span class="k">&#39;static</span> <span class="p">{</span> <span class="p">}</span></code></pre></div>
+
+<p>This is something of a mess, and strictly speaking not all of the constraints are necessary. Just helpful.</p>
+
+<p>The most relevant constraint is <code>PartialOrd</code>, which provides for methods <code>le</code>, <code>lt</code>, <code>ge</code>, <code>gt</code>, for comparing two elements of the same type. Types implementing <code>Timestamp</code> must be partially ordered.</p>
+
+<h3 id="the-pathsummary-trait">The PathSummary trait</h3>
+
+<p>The <code>PathSummary</code> trait is parameterized by a type implementing <code>Timestamp</code>. It indicates how the timestamp should be expected to advance as it moves from one location to another in a timely dataflow graph. It also provides support for combining two summaries (summarizing the concatenated paths).</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">PathSummary</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span> <span class="o">:</span> <span class="n">PartialOrd</span><span class="o">+</span><span class="nb">Eq</span><span class="o">+</span><span class="n">Copy</span><span class="o">+</span><span class="nb">Clone</span><span class="o">+</span><span class="n">Show</span><span class="o">+</span><span class="nb">Default</span><span class="o">+</span><span class="k">&#39;static</span>
+<span class="p">{</span>
+    <span class="k">fn</span> <span class="n">results_in</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">timestamp</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">;</span>       <span class="c1">// advances a timestamp</span>
+    <span class="k">fn</span> <span class="n">followed_by</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">;</span>    <span class="c1">// composes two summaries</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Path summaries allow us to translate events at some distant location to the event’s implications locally. If a distant vertex finishes processing the last of its inputs and produces no outputs, which timestamp (or timestamps) should be decremented locally?</p>
+
+<p>To summarize <em>all</em> paths from one location to another, we exploit the fact that types implementing <code>PathSummary</code> are partially ordered, and that we are interested in the earliest timestamps that might emerge. Any set of path summaries can be reduced down to those elements that are not strictly less than some other set element, which we facilitate with the <code>Antichain&lt;S&gt;</code> structure.</p>
+
+<p>It is likely that the trait will be updated as additional constraints are discovered. For example, it is very likely that <code>results_in</code>  should return either <code>Option&lt;T&gt;</code> or <code>Iterator&lt;T&gt;</code> types rather than single elements. Otherwise, it may be difficult to accommodate bounded loops that discard messages once their timestamp exceeds the loop bound. Other similar unsupported patterns likely exist.</p>
+
+<h3 id="the-scope-trait">The Scope trait</h3>
+
+<p>The <code>Scope</code> trait is where the pieces start to come together. A scope represents an element in a timely dataflow graph, as seen from the outside world (or its parent scope). A scope is parameterized by a timestamp type <code>T</code> and a path summary type <code>S</code>. To implement the trait, a type must provide several methods, which we will soon detail (some diagnostic methods are elided).</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">Scope</span><span class="o">&lt;</span><span class="n">T</span><span class="o">:</span> <span class="n">Timestamp</span><span class="p">,</span> <span class="n">S</span><span class="o">:</span> <span class="n">PathSummary</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span> <span class="o">:</span> <span class="k">&#39;static</span>
+<span class="p">{</span>
+    <span class="k">fn</span> <span class="n">inputs</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">uint</span><span class="p">;</span>   <span class="c1">// number of inputs</span>
+    <span class="k">fn</span> <span class="n">outputs</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">uint</span><span class="p">;</span>  <span class="c1">// number of outputs</span>
+
+    <span class="c1">// get and set summary information as part of set-up.</span>
+    <span class="k">fn</span> <span class="n">get_internal_summary</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">(</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Antichain</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+                                           <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span>
+    <span class="k">fn</span> <span class="n">set_external_summary</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">summaries</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Antichain</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+                                       <span class="n">external</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span>
+
+    <span class="c1">// push and pull progress information at run-time.</span>
+    <span class="k">fn</span> <span class="n">push_external_progress</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">external</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span>
+    <span class="k">fn</span> <span class="n">pull_internal_progress</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">internal</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+                                         <span class="n">consumed</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+                                         <span class="n">produced</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">bool</span><span class="p">;</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This definition is something of a mouthful, but I hope by the end of the post the reasons for each of the parts will become clearer.</p>
+
+<h4 id="inputs-and-outputs">Inputs and outputs</h4>
+
+<p>Each scope is, to the outside world, a vertex that consumes and produces messages timestamped by <code>T</code>. The first thing the outside world will need to know is the shape of the scope: how many inputs does it have, and how many outputs does it have. While not conceptually deep, all further communication between the scope and the outer world will be in terms of these inputs and outputs.</p>
+
+<h4 id="initialization">Initialization</h4>
+
+<p>Two methods are used as part of initializing the computation, the scope summarizing itself to the outer world, and the outer world summarizing itself back to the scope. Because of the hierarchical structure, scopes first summarize themselves to their parent scope, who eventually has enough information to summarize the structure around the scope back to the scope itself.</p>
+
+<p>These summaries include both what the scope (and the outer world) are capable of doing to messages received at their inputs in terms of messages produced at their outputs, and also any initial counts of timestamped messages at each output.</p>
+
+<p>The first method is <code>get_internal_summary</code>, which asks the scope for path summaries for each of its (input, output) pairs, as well as initial counts at each of its outputs for each timestamp.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">get_internal_summary</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">(</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Antichain</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+                                       <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span></code></pre></div>
+
+<p>The result is simply the pair of summaries for each input to each output, and the list for each output of increments to counts for each timestamp.</p>
+
+<p>The second method is <code>set_internal_summary</code>, which reports back to the scope the path summaries from each of its outputs back to its inputs, as well as the initial counts for each of its inputs.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">set_external_summary</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">summaries</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Antichain</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+                                   <span class="n">external</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span></code></pre></div>
+
+<p>The two arguments are the counterparts to the returned values above: path summaries from each of the scope’s outputs to each of the scope’s inputs, and initial counts at each of the scope’s inputs.</p>
+
+<h4 id="runtime">Runtime</h4>
+
+<p>Once the computation has begun, the outer world interacts with the scope in two ways: it notifies the scope of progress made in the outer world, and it requests information about progress made in the scope itself. These are the <code>push_external_progress</code> and <code>pull_internal_progress</code> methods.</p>
+
+<p>The first of these two methods is relatively simple: it communicates to the scope a list of updates to timestamp counts for each of its inputs. These updates communicates progress in the outer world projected down to the scope’s inputs.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">push_external_progress</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">external</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span></code></pre></div>
+
+<p>The method does not return anything, reflecting our desire to have this be asynchronous communication: the notification is not coupled with a response, it is simply sent to the scope from the outer world with the hope that progress will be made in the future.</p>
+
+<p>The second method is slightly more complicated, at least in signature. Its role is to retrieve information from the scope about progress it has made, so that the system as a whole may advance.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">pull_internal_progress</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">internal</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+                                     <span class="n">consumed</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+                                     <span class="n">produced</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">bool</span><span class="p">;</span></code></pre></div>
+
+<p>The arguments are vectors meant to be populated, indicating (respectively) the changes to any internal work projected to the scope’s outputs, the numbers of messages consumed at each of the scope’s inputs, and the numbers of messages produced at each of the scope’s outputs. The method returns a <code>bool</code> indicating whether there is unreported work that may not result in output messages that should prevent the computation from shutting down (for example, vertices with side-effects but no outputs).</p>
+
+<p>This method collects three types of updates together because it is important for correctness that two types of updates occur together:</p>
+
+<ul>
+  <li>Consuming an input message resulting in more internal work (consuming -&gt; internal).</li>
+  <li>Producing an output message resulting in less internal work (internal -&gt; producing).</li>
+</ul>
+
+<p>If either of these two become decoupled, it is possible the outer world may have an incomplete (and incorrect) view of the state of the scope. For example, if the scope acknowledges consuming an input message but does not indicate the new internal work, the outer scope may reasonably assume there is none, and communicate incorrect progress information to others. Likewise, if internal work is retired producing an output message, there is no reason to believe the outside world will know about the message in a timely fashion unless told by the scope itself.</p>
+
+<p>While we might have broken the above into two <code>pull_internal</code> methods, there is a nice symmetry in having one method for each direction of information flow. Moreover, there does not yet seem to be an advantage in soliciting only a subset of progress information from a scope. The scope can report what it wants to report.</p>
+
+<h2 id="next-steps">Next steps</h2>
+
+<p>We’ve described the interfaces currently in place for our hierarchical implementation of timely dataflow. There is still a lot to say about how to implement scopes, especially the generic logic for a scope which wraps a connected collection of other scopes. We’ll talk about this next, and almost certainly surface details that are still up for discussion.</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

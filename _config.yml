@@ -3,7 +3,7 @@ title: Frank McSherry
 email: mcsherry@gmail.com
 description: Some notes on doing less of what I used to do, and more of what I'd rather be doing.
 baseurl: "" # the subpath of your site, e.g. /blog/
-url: "http://frankmcsherry.org" # the base hostname & protocol for your site
+url: "http://www.frankmcsherry.org" # the base hostname & protocol for your site
 twitter_username: frankmcsherry
 github_username:  frankmcsherry
 
