@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 29 Dec 2014 16:23:07 -0500</pubDate>
-    <lastBuildDate>Mon, 29 Dec 2014 16:23:07 -0500</lastBuildDate>
+    <pubDate>Mon, 29 Dec 2014 16:50:12 -0500</pubDate>
+    <lastBuildDate>Mon, 29 Dec 2014 16:50:12 -0500</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -21,7 +21,7 @@
 
 &lt;p&gt;Each scope will &lt;em&gt;project&lt;/em&gt; its unfinished work to its outputs, reporting for each output the timestamps at which messages might possibly emerge. As it performs work, it will communicate progress to the outer timely dataflow graph in the form of changes to the counts for (output, timestamp) pairs.&lt;/p&gt;
 
-&lt;p&gt;Similarly, unfinished work and progress made elsewhere in the graph is first projected to the scopes’s inputs before it is communicated to the subgraph.&lt;/p&gt;
+&lt;p&gt;Similarly, unfinished work and progress made elsewhere in the graph is first projected to the scope’s inputs before it is communicated to the subgraph.&lt;/p&gt;
 
 &lt;h2 id=&quot;an-example&quot;&gt;An example&lt;/h2&gt;
 

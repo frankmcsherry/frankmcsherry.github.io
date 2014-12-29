@@ -16,7 +16,7 @@ Whereas Naiad maintained a flat view of the timely dataflow graph, with counts f
 
 Each scope will *project* its unfinished work to its outputs, reporting for each output the timestamps at which messages might possibly emerge. As it performs work, it will communicate progress to the outer timely dataflow graph in the form of changes to the counts for (output, timestamp) pairs.
 
-Similarly, unfinished work and progress made elsewhere in the graph is first projected to the scopes's inputs before it is communicated to the subgraph.
+Similarly, unfinished work and progress made elsewhere in the graph is first projected to the scope's inputs before it is communicated to the subgraph.
 
 ## An example
 
