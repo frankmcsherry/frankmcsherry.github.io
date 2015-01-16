@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Scalability! But at what COST?</title>
+  <meta name="description" content="Michael Isard, Derek Murray, and I recently sent in a HotOS submission (it’s not blind, so no harm talking about it, we think). The subject is hinted at from...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Scalability! But at what COST?</h1>
+    <p class="post-meta">Jan 15, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p>Michael Isard, Derek Murray, and I recently sent in a <a href="https://www.usenix.org/conference/hotos15">HotOS</a> submission (it’s not blind, so no harm talking about it, we think). The subject is hinted at from the post title (stolen from the paper title):</p>
+
+<blockquote>
+  <p>Big data systems may scale well, but this can often be just because they introduce a lot of overhead.</p>
+</blockquote>
+
+<p>Rather than making your computation go faster, the systems introduce substantial overheads which can require large compute clusters just to bring under control.</p>
+
+<p>In many cases, you’d be better off running the same computation on your laptop.</p>
+
+<h2 id="methodology">Methodology</h2>
+
+<p>Here is the set-up: we took several recent graph-processing publications from the systems community, and compared the measurements they report to simple single-threaded implementations running on my work laptop (RIP). We wrote competent implementations, but we didn’t obsess deeply over fancy algorithms, cunning data-dependent tweaks, or what have you. I’ll show you the code, and you decide.</p>
+
+<p>We evaluated <a href="http://en.wikipedia.org/wiki/PageRank">PageRank</a> (20 iterations) and <a href="http://en.wikipedia.org/wiki/Connected_component_(graph_theory)">graph connectivity</a> on two graphs, <a href="http://an.kaist.ac.kr/traces/WWW2010.html">twitter_rv</a> and <a href="http://law.di.unimi.it/webdata/uk-2007-05/">uk_2007_05</a>. We chose these algorithms and datasets mostly because a recent OSDI 2014 paper <a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf">GraphX</a> used exactly these to evaluate several of the top systems, and we wanted to borrow their numbers rather than try to reproduce them on systems we aren’t expert with.</p>
+
+<p>As a caveat, these algorithms are quite specific to graph processing, and the data sets are not large (billions of edges, but still just a few gigabytes). Our conclusion is not that the systems we are going to look at are obviously bad, but rather that there is not yet much evidence that they are especially good.</p>
+
+<p>The point we try to make in the HotOS submission is that evaluation of these systems, especially in the academic context, is lacking. Folks have gotten all wound-up about scalability, despite the fact that scalability is just a means to an end (performance, capacity). When we actually look at performance, the benefits the scalable systems bring start to look much more sketchy. We’d like that to change.</p>
+
+<h2 id="measurements">Measurements</h2>
+
+<p>All measurements other than the “single thread” lines are from the GraphX paper linked above. I’ll talk about the single-threaded implementations soon, but the results for the most direct implementations of PageRank and label propagation (the algorithm the systems use for graph connectivity) look like this:</p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Spark</td> <td align="right">128</td> <td align="right">857s</td> <td align="right">1759s</td></tr>
+<tr> <td>Giraph</td> <td align="right">128</td> <td align="right">596s</td> <td align="right">1235s</td></tr>
+<tr> <td>GraphLab</td> <td align="right">128</td> <td align="right">249s</td> <td align="right">833s</td></tr>
+<tr> <td>GraphX</td> <td align="right">128</td> <td align="right">419s</td> <td align="right">462s</td></tr>
+<tr> <td>Single thread</td> <td align="right">1</td> <td align="right">300s</td><td align="right">651s</td> </tr>
+<caption>Twenty pagerank iterations</caption>
+</table>
+</center>
+
+<p></p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Spark</td> <td align="right">128</td> <td align="right">1784s</td> <td align="right">8000s+</td></tr>
+<tr> <td>Giraph</td> <td align="right">128</td> <td align="right">200s</td> <td align="right">8000s+</td></tr>
+<tr> <td>GraphLab</td> <td align="right">128</td> <td align="right">242s</td> <td align="right">714s</td></tr>
+<tr> <td>GraphX</td> <td align="right">128</td> <td align="right">251s</td> <td align="right">800s</td></tr>
+<tr> <td>Single thread</td> <td align="right">1</td> <td align="right">153s</td><td align="right">417s</td> </tr>
+<caption>Label propagation to fixed-point (graph connectivity)</caption>
+</table>
+</center>
+
+<p></p>
+<p>These single-threaded numbers paint the scalable systems in a pretty dismal light. With 128x as many cores, none of the scalable systems consistently out-perform a single thread at PageRank, which is probably one of the simplest graph computations (sparse matrix-vector multiplications). The systems are almost a factor of two slower than the single-threaded implementation for label propagation.</p>
+
+<p>Unfortunately, it is only going to get worse for the scalable systems as our investigation continues.</p>
+
+<h2 id="implementation">Implementation</h2>
+
+<p>Let’s talk a bit about what the implementations look like, so that we can figure out whether we are being totally unfair. First, the measurements were taken on a laptop I no longer possess. I’ve reproduced most of the code in <a href="http://www.rust-lang.org">Rust</a> on my new laptop, and the results are mostly the same (some faster, some slower). The measurements above are from a C# implementation, so this isn’t a “Rust is super fasterest” issue. The code is available on GitHub, including both <a href="https://github.com/MicrosoftResearch/NaiadSamples/tree/master/COST">the C# version</a> and <a href="https://github.com/frankmcsherry/COST">the Rust version</a>.</p>
+
+<p>The algorithms we are talking about are all based on iterative scans of the edges in a graph. To support these algorithms, we are going to produce a few implementations of the following trait:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">EdgeMapper</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">map_edges</span><span class="o">&lt;</span><span class="n">F</span><span class="o">:</span> <span class="n">FnMut</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">-&gt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">action</span><span class="o">:</span> <span class="n">F</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">();</span>
+<span class="p">}</span></code></pre></div>
+
+<p>The <code>map_edges</code> method is generic with respect to a closure. It’s a mouthful, but it means <code>action</code> can be called multiple times on inputs of type <code>(u32, u32)</code>,  edges, and may modify its environment. This will probably make more sense once we see it used.</p>
+
+<p>One nice thing about Rust is that each closure corresponds to a new type <code>F</code>, and a new specialized instance of <code>map_edges</code>, inlining the <code>action</code> method. In C# I had to manually unroll some loops. Ew.</p>
+
+<h3 id="algorithms">Algorithms</h3>
+
+<p>Let’s look at how PageRank gets implemented with respect to such a trait:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">pagerank</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">EdgeMapper</span><span class="o">&gt;</span><span class="p">(</span><span class="n">graph</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">G</span><span class="p">,</span> <span class="n">nodes</span><span class="o">:</span> <span class="kt">u32</span><span class="p">,</span> <span class="n">alpha</span><span class="o">:</span> <span class="kt">f32</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">src</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span> <span class="mi">0</span><span class="k">f32</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">dst</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span> <span class="mi">0</span><span class="k">f32</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">deg</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span> <span class="mi">0</span><span class="k">f32</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="n">graph</span><span class="p">.</span><span class="n">map_edges</span><span class="p">(</span><span class="o">|</span><span class="n">x</span><span class="p">,</span> <span class="n">_</span><span class="o">|</span> <span class="p">{</span> <span class="n">deg</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span><span class="k">f32</span> <span class="p">});</span>
+    <span class="k">for</span> <span class="n">_iteration</span> <span class="k">in</span> <span class="p">(</span><span class="mi">0</span> <span class="p">..</span> <span class="mi">20</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">for</span> <span class="n">node</span> <span class="k">in</span> <span class="p">(</span><span class="mi">0</span> <span class="p">..</span> <span class="n">nodes</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">src</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="n">alpha</span> <span class="o">*</span> <span class="n">dst</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">/</span> <span class="n">deg</span><span class="p">[</span><span class="n">node</span><span class="p">];</span>
+            <span class="n">dst</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="k">f32</span> <span class="o">-</span> <span class="n">alpha</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="n">graph</span><span class="p">.</span><span class="n">map_edges</span><span class="p">(</span><span class="o">|</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">|</span> <span class="p">{</span> <span class="n">dst</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">+=</span> <span class="n">src</span><span class="p">[</span><span class="n">x</span><span class="p">];</span> <span class="p">});</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>I’m not going to say very much about whether this is a good pagerank implementation. There are <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.59.5449">better versions</a>, but everyone uses this algorithm for benchmarking
+to ensure they are measuring their system’s performance, not the algorithm’s. This is textbook PageRank, no bells, no whistles.</p>
+
+<p>Label propagation is basically just as simple. For those of you unfamiliar with the algorithm, each node maintains a label, and repeatedly improves it by asking their neighbors if they have a smaller label. This is run until convergence, at which point all nodes in the same component have the same label.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">label_propagation</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">EdgeMapper</span><span class="o">&gt;</span><span class="p">(</span><span class="n">graph</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">G</span><span class="p">,</span> <span class="n">nodes</span><span class="o">:</span> <span class="kt">u32</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">label</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">done</span> <span class="o">=</span> <span class="kc">false</span><span class="p">;</span>
+    <span class="k">while</span> <span class="o">!</span><span class="n">done</span> <span class="p">{</span>
+        <span class="n">done</span> <span class="o">=</span> <span class="k">true</span><span class="p">;</span>
+        <span class="n">graph</span><span class="p">.</span><span class="n">map_edges</span><span class="p">(</span><span class="o">|</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">|</span> <span class="p">{</span>
+            <span class="k">if</span> <span class="n">label</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">!=</span> <span class="n">label</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="p">{</span>
+                <span class="n">done</span> <span class="o">=</span> <span class="kc">false</span><span class="p">;</span>
+                <span class="n">label</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">label</span><span class="p">[</span><span class="n">x</span><span class="p">],</span> <span class="n">label</span><span class="p">[</span><span class="n">y</span><span class="p">]);</span>
+                <span class="n">label</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">label</span><span class="p">[</span><span class="n">x</span><span class="p">],</span> <span class="n">label</span><span class="p">[</span><span class="n">y</span><span class="p">]);</span>
+            <span class="p">}</span>
+        <span class="p">});</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>These are pretty simple implementations. No tricks. Let’s look at how we implement an <code>EdgeMapper</code>.</p>
+
+<h3 id="edgemapper-implementation">EdgeMapper implementation</h3>
+
+<p>Our first EdgeMapper implementation will be based on an adjacency list representation, which we will just map into memory and iterate over. There will be a smarter one later on.</p>
+
+<p>We’ll assume we have two files, <code>graph.nodes</code> and <code>graph.edges</code>, where</p>
+
+<ul>
+  <li><code>graph.nodes</code> contains a sequence of <code>(u32, u32)</code> pairs representing <code>(node_id, degree)</code>.</li>
+  <li><code>graph.edges</code> contains a sequence of <code>u32</code> values representing edge endpoints.</li>
+</ul>
+
+<p>To enumerate the edges, we iterate through <code>graph.nodes</code>, where for each <code>(node_id, degree)</code> pair we read <code>degree</code> values from <code>graph.edges</code> and then pair each with <code>node_id</code> to form an edge.</p>
+
+<p>Ignoring the <code>TypedMemoryMap</code> for the moment (it’s 32 lines of wrapper around Rust’s <code>MemoryMap</code>),
+the mapper structure and its implementation of <code>EdgeMapper</code> are:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">struct</span> <span class="n">NodesEdgesMapper</span> <span class="p">{</span>
+    <span class="n">nodes</span><span class="o">:</span>  <span class="n">TypedMemoryMap</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="n">edges</span><span class="o">:</span>  <span class="n">TypedMemoryMap</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span></code></pre></div>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span> <span class="n">EdgeMapper</span> <span class="k">for</span> <span class="n">NodesEdgesMapper</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">map_edges</span><span class="o">&lt;</span><span class="n">F</span><span class="o">:</span> <span class="n">FnMut</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">-&gt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="k">mut</span> <span class="n">action</span><span class="o">:</span> <span class="n">F</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">()</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">offset</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="k">for</span> <span class="o">&amp;</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">count</span><span class="p">)</span> <span class="k">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">nodes</span><span class="p">[].</span><span class="n">iter</span><span class="p">()</span> <span class="p">{</span>
+            <span class="kd">let</span> <span class="n">limit</span> <span class="o">=</span> <span class="n">offset</span> <span class="o">+</span> <span class="n">count</span> <span class="k">as</span> <span class="n">usize</span><span class="p">;</span>
+            <span class="k">for</span> <span class="o">&amp;</span><span class="n">edge</span> <span class="k">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">edges</span><span class="p">[</span><span class="n">offset</span><span class="p">..</span><span class="n">limit</span><span class="p">].</span><span class="n">iter</span><span class="p">()</span> <span class="p">{</span>
+                <span class="n">action</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">edge</span><span class="p">);</span>
+            <span class="p">}</span>
+            <span class="n">offset</span> <span class="o">=</span> <span class="n">limit</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>That’s all! (except for the <code>TypedMemoryMap</code> type, available in the repository).</p>
+
+<h2 id="getting-smarter">Getting smarter</h2>
+
+<p>Perhaps the single-threaded implementations above are a bit too simple. There are some very easy modifications that result in significantly improved performance. Remember how the simple single-threaded implementations were on-par with or maybe slightly better than the scalable systems? Here are the improved results using smarter algorithms (still from my old laptop and C#):</p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Single thread (simple)</td> <td align="right">1</td> <td align="right">300s</td><td align="right">651s</td> </tr>
+<tr> <td>Single thread (smarter)</td> <td align="right">1</td> <td align="right">110s</td><td align="right">256s</td> </tr>
+<caption>Twenty pagerank iterations</caption>
+</table>
+</center>
+
+<p></p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Single thread (simple)</td> <td align="right">1</td> <td align="right">153s</td><td align="right">417s</td> </tr>
+<tr> <td>Single thread (smarter)</td> <td align="right">1</td> <td align="right">15s</td><td align="right">30s</td> </tr>
+<caption>Label propagation to fixed-point (graph connectivity)</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>There are two types of improvement, processing edges in different orders and using better algorithms, that put the single-threaded implementations so far ahead of the scalable systems.</p>
+
+<h3 id="different-data-layout">Different data layout</h3>
+
+<p>The edge order used above processes all edges from one vertex before moving to the next vertex. Notice that neither of the algorithms need this to hold to be correct. A different ordering, one which exhibits much better cache locality, is the <a href="http://en.wikipedia.org/wiki/Hilbert_curve">Hilbert curve</a> ordering. Informally, it is like ordering edges (x,y) by the interleaving of the bits of x and y: you trade the great locality in the x coordinates to upgrade the poor locality in the y coordinate. You get (good, good) locality instead of (great, poor).</p>
+
+<p>Visually, we can think of ordering pairs (x,y) as drawing a continuous line (a space-filling curve) through a 2d square. An initially square region is decomposed into four squares, each of which will be filled completely before moving to the next square. Notice that the sequence 0, 1, 2, 3 moves only to adjacent squares. The process is applied recursively within each square to order elements within, and even at the finer granularity the movements are only to adjacent squares, even when moving between squares at the coarser granularity. The ordering (curve) we produce is continuous, and very localized.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/hilbert.png" alt="My helpful screenshot" /></p>
+
+<p>The Hilbert implementation of <code>EdgeMapper</code> is similar to our prior implementation, with some minor layout changes. We start from two files:</p>
+
+<ul>
+  <li><code>graph.upper</code> contains a sequence of <code>((u16, u16), u32)</code> values, each a 65536x65536 square indicating the upper 16 bits of x and y, followed by the number of edges in the square. These entries are ordered by the order their corresponding squares are visited by the curve.</li>
+  <li><code>graph.lower</code> contains a sequence of <code>(u16, u16)</code> values for the lower 16 bits for each edge. These entries are ordered by the the order the curve visits them when traversing their square.</li>
+</ul>
+
+<p>The <code>EdgeMapper</code> implementation is basically identical to the implementation for vertex-order above, but results in improved PageRank running times. One lesson is that PageRank is essentially memory-bound; the time is spent either thrashing the TLB or waiting for results from the memory controller, rather than the CPU or disk. It scales because each machine offers an indepedent memory controller. Instead, you can partially fix the problem by re-arranging memory accesses like we have done here.  You could also use <a href="http://en.wikipedia.org/wiki/Page_(computer_memory)#Huge_pages">huge pages</a> (the C# code does), which I can’t do yet on OS X.</p>
+
+<p>We should also admit that the Hilbert curve ordering is not typically how graphs are presented, and consequently there would be some work involved in transforming your input data to this ordering. If you are only planning on doing one computation, it may not be worth the effort. Fortunately, a single-threaded implementation takes less time to re-order the edges (about 180s in Rust) than any of the systems above take to perform 20 iterations of PageRank. It’s included in the repository.</p>
+
+<p>Both GraphLab and GraphX do their own data layout as part of pre-processing. One of the layouts they consider resembles the Hilbert ordering: partitioning vertices into k parts and sending sub-squares of edges to k^2 workers. The Hilbert-curve ordering is totally compatible with their system designs, and they could probably speed up a bit if they used it. It is somewhat in conflict with their approaches to sparse updates (when you only want to process a subset of vertices), trading latency in the sparse-update case for throughput in the (often more expensive) bulk-processing case.</p>
+
+<h3 id="different-algorithms">Different algorithms</h3>
+
+<p>The label propagation algorithm is not commonly taught as a good algorithm for graph connectivity. It has poor asymptotic bounds, even when compared with more traditional <a href="http://en.wikipedia.org/wiki/Borůvka's_algorithm">algorithms from 90 years ago</a>.</p>
+
+<p>Consider the standard <a href="http://en.wikipedia.org/wiki/Disjoint-set_data_structure">union-find algorithm</a>, which maintains a <code>root</code> variable for each vertex, and scans the edges once, merging roots when it finds edges whose endpoints have different roots. We use the “weighted-union” variation, where the merge pays attention to how deep each root is when determining which way to swing the pointers (this gives it an O(m log n) asymptotic complexity).</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">union_find</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">EdgeMapper</span><span class="o">&gt;</span><span class="p">(</span><span class="n">graph</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">G</span><span class="p">,</span> <span class="n">nodes</span><span class="o">:</span> <span class="kt">u32</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">root</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">rank</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">nodes</span><span class="p">).</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span> <span class="mi">0</span><span class="k">u8</span><span class="p">).</span><span class="n">collect</span><span class="p">();</span>
+    <span class="n">graph</span><span class="p">.</span><span class="n">map_edges</span><span class="p">(</span><span class="o">|</span><span class="k">mut</span> <span class="n">x</span><span class="p">,</span> <span class="k">mut</span> <span class="n">y</span><span class="o">|</span> <span class="p">{</span>
+        <span class="k">while</span> <span class="n">x</span> <span class="o">!=</span> <span class="n">root</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="p">{</span> <span class="n">x</span> <span class="o">=</span> <span class="n">root</span><span class="p">[</span><span class="n">x</span><span class="p">];</span> <span class="p">}</span>
+        <span class="k">while</span> <span class="n">y</span> <span class="o">!=</span> <span class="n">root</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="p">{</span> <span class="n">y</span> <span class="o">=</span> <span class="n">root</span><span class="p">[</span><span class="n">y</span><span class="p">];</span> <span class="p">}</span>
+        <span class="k">if</span> <span class="n">x</span> <span class="o">!=</span> <span class="n">y</span> <span class="p">{</span>
+            <span class="k">match</span> <span class="n">rank</span><span class="p">[</span><span class="n">x</span><span class="p">].</span><span class="n">cmp</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rank</span><span class="p">[</span><span class="n">y</span><span class="p">])</span> <span class="p">{</span>
+                <span class="nb">Less</span>    <span class="o">=&gt;</span> <span class="n">root</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="n">y</span><span class="p">,</span>
+                <span class="nb">Greater</span> <span class="o">=&gt;</span> <span class="n">root</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span><span class="p">,</span>
+                <span class="nb">Equal</span>   <span class="o">=&gt;</span> <span class="p">{</span> <span class="n">root</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span><span class="p">;</span> <span class="n">rank</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span> <span class="p">},</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">});</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This is one more line of code than label propagation, but it is 10x faster and 100x less embarassing.</p>
+
+<p>The union-find algorithm is fundamentally incompatible with the graph computation approaches Giraph, GraphLab, and GraphX put forward (the so-called “think like a vertex” model). That doesn’t stop it from being way better than label propagation, and even <a href="http://theory.stanford.edu/~sergei/papers/spaa11-matchings.pdf">parallelizable</a>.</p>
+
+<h2 id="important-things">Important things</h2>
+
+<p>Several factors affect the performance we’ve seen above. Let’s see where the differences come from.</p>
+
+<p>To get consistent measurements despite using <code>mmap</code>, each of these numbers are from a second run. This means that the data are effectively “in memory”. The first runs are sketchier and more variable.
+We’ll use graph connectivity as our example, from label propagation to our fastest union-find, running on my laptop (a 2014 MacBook pro) using Rust implementations.</p>
+
+<table style="width:75%">
+<tr> <td align="right">150.6s</td> <td>:</td> <td> Label propagation and vertex ordering</td></tr>
+<tr> <td align="right">31.1s</td> <td>:</td> <td> Switching to Union Find</td></tr>
+<tr> <td align="right">16.0s</td> <td>:</td> <td> Switching to Hilbert-curve ordering</td></tr>
+<tr> <td align="right">11.8s</td> <td>:</td> <td> Using unsafe indexing for roots</td></tr>
+<tr> <td align="right">8.7s</td> <td>:</td> <td> Alternate EdgeMapper with smaller memory footprint (in the repo)</td></tr>
+<tr> <td align="right">8.0s</td> <td>:</td> <td> Pre-fetching root[x] and root[y] before the while loop.</td></tr>
+</table>
+
+<p></p>
+
+<p>Note, these numbers differ from those reported above due to being a totally different implementation. Mainly, the first measurements took advantage of large pages, which do not seem to be exist on OS X. This benefit is largely recouped by using the Hilbert ordering, which also eases pressure on the TLB. The custom EdgeMapper re-uses a small buffer, and likely messes up the TLB less than mmap does.</p>
+
+<h2 id="take-aways">Take-aways</h2>
+
+<p>Lots of people struggle with the complexities of getting big data systems up and running, when they possibly shouldn’t be using the systems in the first place. The data sets above are certainly not small (billions of edges), but still run just fine on a laptop. Much faster than the distributed systems, at least.</p>
+
+<p>Here are two helpful guidelines (for largely disjoint populations):</p>
+
+<ol>
+  <li>If you are going to use a big data system for yourself, see if it is faster than your laptop.</li>
+  <li>If you are going to build a big data system for others, see that it is faster than my laptop.</li>
+</ol>
+
+<p>We implemented a few of these algorithms in <a href="http://research.microsoft.com/Naiad/">Naiad</a> and were able to get performance that beats the single thread. Admittedly, it took some work for <a href="http://theory.stanford.edu/~sergei/papers/spaa11-matchings.pdf">parallel union-find</a>, but we learned quite a bit and made something better as a result (delightfully: we didn’t have to change Naiad itself; just application logic).</p>
+
+<p>We think everyone should have to do this, because it leads to better systems and better research.</p>
+
+<p>Of course, there are some reasons why you might expect some overheads for your distributed system. The machines Amazon provides as VMs are differently spec’ed than my laptop, which targets peak single-threaded performance. GraphX uses hash tables (which can add an order of magnitude to the critical path) rather than dense arrays, to maintain its per-vertex state, to provide a layer of robustness. Fault-tolerance calls for data to be pushed from fast random access memory out to stable storage to insure against lost work in the case of a failure.</p>
+
+<p>At the same time, it is worth understanding which of these features are boons, and which are the tail wagging the dog. We go to EC2 because it is too expensive to meet the hardware requirements of these systems locally and fault-tolerance is only important because we have involved so many machines, at which point we wonder whether the robustness of these hash tables is worth all the additional effort.
+ Perhaps, but we should be thinking about it quite a bit harder than we currently are.</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
