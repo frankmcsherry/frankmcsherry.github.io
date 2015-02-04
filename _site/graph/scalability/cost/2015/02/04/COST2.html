@@ -74,7 +74,7 @@
 
 <p>The only reported data I know of for graph processing at the “one trillion things” scale is <a href="https://www.facebook.com/notes/facebook-engineering/scaling-apache-giraph-to-a-trillion-edges/10151617006153920">Facebook’s processing of a one trillion edge graph</a>, where they got the per-iteration pagerank time down to under four minutes on 200 commodity machines (number of cores unknown to me). That’s really quite good (and, much better than Giraph performed in GraphX’s evaluation).</p>
 
-<p>I don’t have a trillion edge graph, unfortunately, but thanks to the nice people at <a href="http://webdatacommons.org">Web Data Commons</a>, I was able to download a <a href="http://webdatacommons.org/hyperlinkgraph/index.html">128B edge graph</a>. The same algorithms from the previous post yield:</p>
+<p>I don’t have a trillion edge graph, unfortunately, but thanks to the nice people at <a href="http://webdatacommons.org">Web Data Commons</a>, I was able to download a <a href="http://webdatacommons.org/hyperlinkgraph/index.html">128B edge graph</a>, based on hyperlink structure from <a href="http://commoncrawl.org">Common Crawl</a>. The same algorithms from the previous post yield:</p>
 
 <center>
 <table border="1" style="width:75%">
