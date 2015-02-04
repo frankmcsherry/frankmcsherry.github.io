@@ -112,7 +112,7 @@ I don’t think we know very much about any other scalable graph processing syst
 
 <p>There were some relatively minor implementation details involved in getting 128 billion edges onto my laptop, and then processed efficiently (which isn’t to say that I got them right the first time). Doing the math, if one writes down a <code>(u32, u32)</code> for each edge, this ends up at a terabyte of data, and my laptop doesn’t have that kind of SSD. So, we’ll have to be a bit smarter.</p>
 
-<p>Using the Hilbert curve layout leads to a very simple compressed representation: having sorted the <code>u64</code> values it uses to represent edges, one can simply delta-encode them (writing the differences between adjacent values). Because the Hilbert curve teases out locality, the gaps are often quite small, and therefore compress nicely. When I combined a variable-length integer encoding with gzip, the resulting file was onle 45GB; about 2.8 bits per edge). Decompressed (with just the variable-length delta encoding), it is 154GB, which is the representation I used to get the measurements above.</p>
+<p>Using the Hilbert curve layout leads to a very simple compressed representation: having sorted the <code>u64</code> values it uses to represent edges, one can simply delta-encode them (writing the differences between adjacent values). Because the Hilbert curve teases out locality, the gaps are often quite small, and therefore compress nicely. When I combined a variable-length integer encoding with gzip, the resulting file was only 45GB; about 2.8 bits per edge). Decompressed (with just the variable-length delta encoding), it is 154GB, which is the representation I used to get the measurements above.</p>
 
 <p>Not only is the Hilbert curve good for compression, it is pretty much mandatory due to the locality it provides when accessing the per-vertex state. Random access into main memory is not all that bad, but when the working set for vertex state in pagerank is 40GB, random access turns in to thrashing. This is not only slow, but it wears out my SSD, and no one wants that. The near-linear performance scaling as we went up two orders of magnitude in size is evidence for how cool the Hilbert curve is.</p>
 
@@ -124,7 +124,7 @@ I don’t think we know very much about any other scalable graph processing syst
 
 <p>I’m not going to try this nonsense on any larger graphs. The ball is now in the court of the scalable systems. We’ll just have to wait and see how they do before setting any stretch performance goals.</p>
 
-<p>Instead, it’s time to get back to work on timely dataflow in Rust! Stay tuned for that kind of post.</p>
+<p>Instead, it’s time to get back to work on <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow in Rust</a>! Stay tuned for that kind of post.</p>
 
   </article>
 
