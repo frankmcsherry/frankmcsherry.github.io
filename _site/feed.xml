@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 04 Feb 2015 14:48:27 -0800</pubDate>
-    <lastBuildDate>Wed, 04 Feb 2015 14:48:27 -0800</lastBuildDate>
+    <pubDate>Wed, 04 Feb 2015 14:55:23 -0800</pubDate>
+    <lastBuildDate>Wed, 04 Feb 2015 14:55:23 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -19,7 +19,7 @@
   &lt;p&gt;One billion edges is just a few gigabytes; it’s hardly “big data” …&lt;/p&gt;
 &lt;/blockquote&gt;
 
-&lt;p&gt;My personal opinion is that if your system doesn’t perform well on one billion things, you don’t yet have the credibility to just claim it’s going to work much better on a trillion things. But let’s see where this goes …&lt;/p&gt;
+&lt;p&gt;My personal opinion is that if your system doesn’t perform well on one billion things, you don’t yet have the credibility to claim it’s going to work much better on a trillion things. But let’s see where this goes …&lt;/p&gt;
 
 &lt;p&gt;The only reported data I know of for graph processing at the “one trillion things” scale is &lt;a href=&quot;https://www.facebook.com/notes/facebook-engineering/scaling-apache-giraph-to-a-trillion-edges/10151617006153920&quot;&gt;Facebook’s processing of a one trillion edge graph&lt;/a&gt;, where they got the per-iteration pagerank time down to under four minutes on 200 commodity machines (number of cores unknown to me). That’s really quite good (and, much better than Giraph performed in GraphX’s evaluation).&lt;/p&gt;
 
