@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 05 Feb 2015 07:10:09 -0800</pubDate>
-    <lastBuildDate>Thu, 05 Feb 2015 07:10:09 -0800</lastBuildDate>
+    <pubDate>Thu, 05 Feb 2015 08:16:14 -0800</pubDate>
+    <lastBuildDate>Thu, 05 Feb 2015 08:16:14 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -19,15 +19,19 @@
   &lt;p&gt;One billion edges is just a few gigabytes; it’s hardly “big data” …&lt;/p&gt;
 &lt;/blockquote&gt;
 
-&lt;p&gt;My personal opinion is that if your system doesn’t perform well on one billion things, you don’t yet have the credibility to claim it’s going to work much better on a trillion things. But let’s see where this goes …&lt;/p&gt;
+&lt;p&gt;My personal opinion is that if your system doesn’t perform well on one billion things, you don’t yet have the credibility to claim it’s going to work much better on a trillion things. But let’s see where this goes…&lt;/p&gt;
 
 &lt;p&gt;The only reported data I know of for graph processing at the “one trillion things” scale is &lt;a href=&quot;https://www.facebook.com/notes/facebook-engineering/scaling-apache-giraph-to-a-trillion-edges/10151617006153920&quot;&gt;Facebook’s processing of a one trillion edge graph&lt;/a&gt;, where they got the per-iteration pagerank time down to under four minutes on 200 commodity machines (number of cores unknown to me). That’s really quite good (and, much better than Giraph performed in GraphX’s evaluation).&lt;/p&gt;
 
-&lt;p&gt;I don’t have a trillion edge graph, unfortunately, but thanks to the nice people at &lt;a href=&quot;http://webdatacommons.org&quot;&gt;Web Data Commons&lt;/a&gt;, I was able to download a &lt;a href=&quot;http://webdatacommons.org/hyperlinkgraph/index.html&quot;&gt;128B edge graph&lt;/a&gt;, based on the hyperlink structure from &lt;a href=&quot;http://commoncrawl.org&quot;&gt;Common Crawl&lt;/a&gt;. Using the same algorithms from the previous post yields:&lt;/p&gt;
+&lt;p&gt;I don’t have a trillion edge graph, unfortunately, but thanks to the nice people at &lt;a href=&quot;http://webdatacommons.org&quot;&gt;Web Data Commons&lt;/a&gt;, I was able to download a &lt;a href=&quot;http://webdatacommons.org/hyperlinkgraph/index.html&quot;&gt;128B edge graph&lt;/a&gt;, based on the hyperlink structure from &lt;a href=&quot;http://commoncrawl.org&quot;&gt;Common Crawl&lt;/a&gt;. Using the same algorithms from the previous post yields a new (mostly empty) column:&lt;/p&gt;
 
 &lt;center&gt;
 &lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
 &lt;tr&gt; &lt;th&gt;System&lt;/th&gt; &lt;th&gt;cores&lt;/th&gt; &lt;th&gt;twitter_rv&lt;/th&gt; &lt;th&gt;uk_2007_05&lt;/th&gt;&lt;th&gt;common crawl&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Spark&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;857s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1759s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Giraph&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;596s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1235s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphLab&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;249s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;833s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;419s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;462s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt; &lt;td&gt;Single thread&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;242s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;256s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;46600s*&lt;/td&gt;&lt;/tr&gt;
 &lt;caption&gt;Twenty pagerank iterations&lt;/caption&gt;
 &lt;/table&gt;
@@ -40,8 +44,12 @@
 &lt;center&gt;
 &lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
 &lt;tr&gt; &lt;th&gt;System&lt;/th&gt; &lt;th&gt;cores&lt;/th&gt; &lt;th&gt;twitter_rv&lt;/th&gt; &lt;th&gt;uk_2007_05&lt;/th&gt;&lt;th&gt;common crawl&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Spark&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1784s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;8000s+&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Giraph&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;200s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;8000s+&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphLab&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;242s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;714s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;128&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;251s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;800s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;unknown&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt; &lt;td&gt;Single thread&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;15s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;30s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;1700s&lt;/td&gt;&lt;/tr&gt;
-&lt;caption&gt;Union find (graph connectivity)&lt;/caption&gt;
+&lt;caption&gt;Graph connectivity&lt;/caption&gt;
 &lt;/table&gt;
 &lt;/center&gt;
 
