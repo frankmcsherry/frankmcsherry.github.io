@@ -5,13 +5,13 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 04 Feb 2015 17:31:40 -0800</pubDate>
-    <lastBuildDate>Wed, 04 Feb 2015 17:31:40 -0800</lastBuildDate>
+    <pubDate>Wed, 04 Feb 2015 17:32:12 -0800</pubDate>
+    <lastBuildDate>Wed, 04 Feb 2015 17:32:12 -0800</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
         <title>Bigger data; same laptop</title>
-        <description>&lt;p&gt;This post follows up the previous post, &lt;a href=&quot;http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html&quot;&gt;“Scalability! But at what COST?”&lt;/a&gt; which got a great response. The short version of the previous post is that for the graph datasets and computations the scalable systems research community is currently looking at, a laptop outperforms the scalable systems.&lt;/p&gt;
+        <description>&lt;p&gt;This post follows up the previous post, &lt;a href=&quot;http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html&quot;&gt;“Scalability! But at what COST?”&lt;/a&gt;, which got a great response. The short version of the previous post is that for the graph datasets and computations the scalable systems research community is currently looking at, a laptop outperforms the scalable systems.&lt;/p&gt;
 
 &lt;p&gt;There were several flavors of response to the post (many of which were very supportive!), but one that I’d like to address in this post is&lt;/p&gt;
 
