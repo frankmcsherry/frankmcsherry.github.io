@@ -5,12 +5,12 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 07 Apr 2015 15:33:54 +0200</pubDate>
-    <lastBuildDate>Tue, 07 Apr 2015 15:33:54 +0200</lastBuildDate>
+    <pubDate>Tue, 07 Apr 2015 15:36:42 +0200</pubDate>
+    <lastBuildDate>Tue, 07 Apr 2015 15:36:42 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
-        <title>Differential dafaflow</title>
+        <title>Differential dataflow</title>
         <description>&lt;p&gt;I’m now in Berlin, working on &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;timely dataflow in Rust&lt;/a&gt;. It is up and running, multiple processes and all, so the next step is to get some experience using it to point out performance and usability issues. Unfortunately, at the moment there is a Rust internal compiler error preventing me from doing this, so I’m going to write a bit about some of the applications!&lt;/p&gt;
 
 &lt;p&gt;Differential dataflow is an approach to doing incremental data-parallel computation that several of us &lt;a href=&quot;http://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf&quot;&gt;introduced at CIDR 2013&lt;/a&gt;. I’ll work through the details, but the rough idea is rather than have a point in the computation (a dataflow vertex) maintain a dataset, it maintains a collection of differences from which the data can be efficiently updated. If this sounds a bit like incremental dataflow computation, it is, and differential dataflow can be viewed as a generalization of existing techniques from incremental dataflow computation to dataflow graphs with possibly nested iteration.&lt;/p&gt;

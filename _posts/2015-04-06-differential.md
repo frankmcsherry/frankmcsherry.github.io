@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Differential dafaflow"
+title:  "Differential dataflow"
 date:   2015-04-07 14:00:00
 categories: differential dataflow
 published: true
