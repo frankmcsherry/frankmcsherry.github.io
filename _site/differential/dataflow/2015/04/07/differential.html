@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Differential dafaflow</title>
+  <meta name="description" content="I’m now in Berlin, working on timely dataflow in Rust. It is up and running, multiple processes and all, so the next step is to get some experience using it ...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/differential/dataflow/2015/04/07/differential.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Differential dafaflow</h1>
+    <p class="post-meta">Apr 7, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p>I’m now in Berlin, working on <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow in Rust</a>. It is up and running, multiple processes and all, so the next step is to get some experience using it to point out performance and usability issues. Unfortunately, at the moment there is a Rust internal compiler error preventing me from doing this, so I’m going to write a bit about some of the applications!</p>
+
+<p>Differential dataflow is an approach to doing incremental data-parallel computation that several of us <a href="http://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf">introduced at CIDR 2013</a>. I’ll work through the details, but the rough idea is rather than have a point in the computation (a dataflow vertex) maintain a dataset, it maintains a collection of differences from which the data can be efficiently updated. If this sounds a bit like incremental dataflow computation, it is, and differential dataflow can be viewed as a generalization of existing techniques from incremental dataflow computation to dataflow graphs with possibly nested iteration.</p>
+
+<h2 id="setting">Setting</h2>
+
+<p>Differential dataflow is primarily motivated by its ability to efficiently compute and update arbitrarily nested iterative data-parallel computations (things like MapReduce, but extended with an iteration operator). Each operator in a differential dataflow computation is defined much like a MapReduce stage, including:</p>
+
+<ul>
+  <li>For each input <code>i</code> a key function <code>Key_i: Si -&gt; K</code> from source records to a common key type.</li>
+  <li>A reduction fuction <code>Reduce: (K, &amp;[S0], &amp;[S1], ... , &amp;[Sk]) -&gt; &amp;[R]</code> from a key and some source records to some result records.</li>
+</ul>
+
+<p>The output collection for any input collection is whatever results from grouping the source records by the key function, applying the reduction function, and merging the result records across all groups.</p>
+
+<p>These operators are arranged in a graph, with outputs from one leading in to the inputs of others.</p>
+
+<p>To this we add an iteration operator on collections, which takes an iteration function from collections to collections and a number of iterations. If we were to write this in Rust it might look like:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">IterableExt</span> <span class="p">{</span>
+    <span class="c1">// returns something equivalent to iteration^steps(data)</span>
+    <span class="k">fn</span> <span class="n">iterate</span><span class="o">&lt;</span><span class="n">F</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="n">Self</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">Self</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Self</span><span class="p">,</span> <span class="n">body</span><span class="o">:</span> <span class="n">F</span><span class="p">,</span> <span class="n">steps</span><span class="o">:</span> <span class="kt">u64</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">;</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This iteration operator starts to make dataflow look like a pretty powerful computational framework, but implementing it efficiently raises all sorts of questions.</p>
+
+<h3 id="naive-implementation">Naive implementation</h3>
+
+<p>Clearly there are some ways we could implement <code>iterate</code> for a <code>Collection&lt;S&gt;</code>. We could just have a <code>for</code>-loop which does as many steps as requested:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;</span> <span class="n">Iterable</span> <span class="k">for</span> <span class="n">Collection</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">iterate</span><span class="o">&lt;</span><span class="n">F</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="n">Self</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">Self</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Self</span><span class="p">,</span> <span class="n">body</span><span class="o">:</span> <span class="n">F</span><span class="p">,</span> <span class="n">steps</span><span class="o">:</span> <span class="kt">u64</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="p">;</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">steps</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">body</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">data</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This approach is possibly very wasteful, especially in a not-uncommon case where the collection stabilizes as it iterates, reaching a fixed point (where each application of <code>body</code> results in the same collection). We could put some logic in place checking each iteration to see if it has change and exiting early if it hasn’t, but we may still be leaving a lot of performance on the table if <em>most</em> of the collection is not changing.</p>
+
+<h3 id="incremental-dataflow">Incremental dataflow</h3>
+
+<p>If we only want to do one <code>iterate</code> at a time (“obviously”, you say; bear with me), a smarter approach is to frame the implementation in terms of incremental updates to the collections. Rather than fully form collections <code>data</code> each iteration, the operators could remember the previous values of <code>data</code> and we could instead determine and communicate only <em>changes</em> to <code>data</code>. If all operators are implemented this way, the entire computation can be in terms of these differences.</p>
+
+<p>Incrementally updates are not only more efficient for communication, but in the data-parallel setting they can also dramatically improve performance. If I have a collection of one billion records, and I am presented with a single change: “add/remove <code>record</code>”, I only need to apply the key function to <code>record</code> and incrementally update the <em>group</em> that <code>record</code> might belong to. Other groups have not changed, and our computational model requires their outputs be functions only of the inputs. The only possible change to the output is due to changes to the <code>key(record)</code> group.</p>
+
+<h3 id="limitations">Limitations</h3>
+
+<p>One way to view incremental computation is that for a <em>sequence</em> of collections, it determines and communicates the differences between collections. There are several cases where this is a perfect fit, but also many where the requirement that the collections form a sequence is limiting.</p>
+
+<p>Consider the problem of incrementally updating the input to an iterative computation. While the iterates of the iterative computation do form a sequence, we would now like to change the <em>first</em> element in that sequence. What incremental computation allows us to do is update the <em>final</em> element of the sequence. For some computations this may be correct, but for many computations it is simply incorrect to “patch” the output; it doesn’t produce the right answer.</p>
+
+<p>Consider a hypothetical case where a bank uses some fraud data and a set of financial transactions to expand its view of “risky customers” to those people connected to a fraudster through any number of financial transactions. Perhaps you are accidentally determined to have had fraudulent activity, leading to your associates being labeled as fraudsters too. While you might correct the data after talking with the bank, removing your name from the source fraud dataset, your associates are still labeled as fraudsters and in one iteration you will be again too. In fact, none of you should be labeled as such, but updates to the current state cannot fix that. We must “restart” the iterative computation with the change.</p>
+
+<h2 id="differential-interpretation">Differential interpretation</h2>
+
+<p>Differential dataflow removes the restriction to sequences of collections by generalizing the notion of “differences between collections”. Formally, it uses a technique called “<a href="http://en.wikipedia.org/wiki/Möbius_inversion_formula">Moebius inversion</a>” to allow differencing along an arbitrary partial order (rather than just a sequence). Although this sounds very complicated, and the area is deep and interesting, our application of it really isn’t so mysterious.</p>
+
+<p>Imagine we have a set of collections <code>Collection[t]</code> indexed by some elements <code>t</code> of a set. If we avoid being too specific about this set, some examples become a bit easier to understand.</p>
+
+<p>For our example of propagation of fraud data along edges in a financial transaction graph, the collection indicating who is or isn’t risky could be indexed by the pair <code>(epoch, iteration)</code>, indicating the state of the collection using the <code>epoch</code> version of input fraud data, after <code>iteration</code> rounds of computation. The risk data are initially indexed by <code>(0,0)</code> and perhaps converge to their limit at <code>(0,1032)</code>. You place a phone call to the bank, who can then update the base fraud data with index <code>(1,0)</code> indicating new data and no iteration yet. This data can then lead to a revised output now indexed by <code>(1,937)</code> (as perhaps the number of rounds to converge has decreased without you in the input data).</p>
+
+<p>Pedagogically, the collection at <code>(1,0)</code> is more similar to the collection at <code>(0,0)</code> than it is to the collection “just a moment ago” at <code>(0,1032)</code>. Rather than attempt to describe the collection at <code>(1,0)</code> in terms of the collection at <code>(0,1032)</code>, as incremental computation might, we will describe a more flexible differencing scheme that instead relates it to the collection at <code>(0,0)</code>.</p>
+
+<p>More generally, we can describe the collection at <code>(1,i)</code> by the collections at <code>(0,i)</code> <em>and</em> <code>(1,i-1)</code>.</p>
+
+<p>The indices we choose to use, and the partial order we define over them, will drive how the differencing is done. By choosing an ordering that better reflects the development and dependence of data we are able to have fewer and smaller differences. The fact that <code>(1,0)</code> and <code>(0,1032)</code> are not ordered using the standard partial order allows us to avoid using either as part of the definition of the other.</p>
+
+<p>Using the product partial order (one pair is less-or-equal another if both coordinates are), we get a nice alignment with the actual dependencies in an iterative computation, where an iterate depends only on collections at prior iterations and prior epochs.</p>
+
+<h3 id="differential-representation">Differential representation</h3>
+
+<p>Let’s write down a fairly uncontroversial view of how we might represent collections <code>Collection[t]</code> as the accumulation of differences <code>Difference[t]</code> over a common ordered set of indices:</p>
+
+<p><code>
+Collection[t] = sum_{s &lt;= t} Difference[s]
+</code></p>
+
+<p>This feels very safe and intuitive for a total order like the natural numbers: we add up the differences up to and including index <code>t</code>.</p>
+
+<p>Nothing about this equation requires that the elements be <em>totally</em> ordered. We can just as easily use a partial order like <code>(u64, u64)</code>: pairs of numbers where one is less or equal another exactly when both coordinates are, just like in our <code>(epoch, iteration)</code> example above.</p>
+
+<h3 id="differential-computation">Differential computation</h3>
+
+<p>Our intuition for computation may start to break down without a total order, raising the technical question of “how do we determine the values of <code>Difference[t]</code>?” A bit of mathematical re-arrangement takes the implicit definition of <code>Difference[t]</code> above to</p>
+
+<p><code>
+Difference[t] = Collection[t] - sum_{s &lt; t} Difference[s]
+</code></p>
+
+<p>which indicates that we can derive differences from the collection at index <code>t</code> and all “earlier” differences. This adds a technical requirement that the partial order be “<a href="http://en.wikipedia.org/wiki/Well-founded_relation">well-founded</a>”, which informally means that we can always find something to start the differencing from. We will make this a lot easier by assuming that our computation is driven by a system (a timely dataflow system, perhaps!) presenting differences in an order so that for each <code>t</code> we have already determined and recorded <code>Difference[s]</code> for all <code>s &lt; t</code>.</p>
+
+<p>This may look very expensive, and of course if we had to compute <code>Difference[t]</code> for every <code>t</code> we would be pretty upset. Fortunately, as with incremental computation, when an operator is presented with new input differences, we can restrict the <code>t</code> for which it may possibly produce output differences. Further, our use of partial orders can yield substantially sparser differences, meaning less work to do.</p>
+
+<p>Like in incremental dataflow, an differential dataflow operator only needs to update the output for keys associated with changed inputs. However, an update at an index <code>t</code> may require outputs at indices other than <code>t</code>, which is very much <em>un</em>-like incremental computation. For the moment, let’s just say that we can compute these indices efficiently, and the number is often not particularly large.</p>
+
+<h2 id="implementation">Implementation</h2>
+
+<p>Let’s go through a simple implementation of a differentail dataflow operator (in Rust).</p>
+
+<h3 id="representing-collections">Representing collections</h3>
+
+<p>The first thing to define is a differential representation of a collection. In our simple approach we will just store each <code>difference[t]</code> as a list of <code>(V, i64)</code> indicating the change to the count associated with each record. In fact, we’ll just stash all of these in the same <code>Vec&lt;(V, i64)&gt;</code>, and use a second array to delineate which regions are associated with which indices, of index type <code>T</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">struct</span> <span class="n">CollectionAsList</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">V</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="n">updates</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">V</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span>   <span class="c1">// value and delta</span>
+    <span class="n">indices</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span> <span class="n">usize</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span> <span class="c1">// index and count</span>
+<span class="p">}</span></code></pre></div>
+
+<p>What do we need to be able to do with this representation? So far, I’ve been using traits for accessing the data as indexed collections or as indexed differences:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">Collection</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">V</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">setc</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">data</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">V</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">);</span>
+    <span class="k">fn</span> <span class="n">getc</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">T</span><span class="p">,</span> <span class="n">data</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">V</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">);</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Here the <code>setc</code> method takes an index and an intended collection, and inserts the correct differences at <code>index</code> to ensure that when accumulated the result is <code>data</code>. The <code>getc</code> method populates the supplied <code>Vec&lt;(V, i64)&gt;</code> with the accumulated differences, which by definition is the value of the collection at <code>index</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">trait</span> <span class="n">Difference</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">V</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">setd</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">data</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">V</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">);</span>
+    <span class="k">fn</span> <span class="n">getd</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">&amp;</span><span class="p">[(</span><span class="n">V</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)];</span>
+<span class="p">}</span></code></pre></div>
+
+<p>In the <code>Difference</code> trait, the <code>setd</code> method just internalizes the suppied vector of updates and the <code>getd</code> method just returns the slice corresponding to the requested index.</p>
+
+<p>The method names have <code>c</code> and <code>d</code> suffixes so that I don’t have to show you Rust’s name resolution. It isn’t that horrible, but it is distracting I’ll probably just end up changing the traits anyhow.</p>
+
+<p>In my implementation I’m currently using the constraint that <code>V: Ord</code>, meaning we can tell when two instances are the same (important for accumulating differences) and there is some ordering on them. This ordering property is less obviously necessary, but it does allow me to do merge-based accumulation, rather than faking out a hash table inside the arrays or something horrible like that.</p>
+
+<h3 id="representing-computations">Representing computations</h3>
+
+<p>The next thing to consider is how an operator might be implemented. In the interest of manageable type signatures we will do a unary operator, from collections of <code>S</code> to collection of <code>R</code>, indexed by <code>T</code>.</p>
+
+<p>For each key, we will need to keep track of the accepted source differences, and we will want to keep track of the produced result differences. We will use the following simple structure for per-key differential state:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">struct</span> <span class="n">DifferentialShard</span><span class="o">&lt;</span><span class="n">S</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">T</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="n">source</span><span class="o">:</span> <span class="n">CollectionAsList</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">S</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="n">result</span><span class="o">:</span> <span class="n">CollectionAsList</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span> <span class="n">R</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Next we’ll want to put these together as an operator, involving a key selection function, some logic to apply to transform source records to result records, and some storage to make it all stick together.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">struct</span> <span class="n">DifferentialOperator</span><span class="o">&lt;</span><span class="n">K</span><span class="o">:</span> <span class="nb">Hash</span><span class="o">+</span><span class="nb">Eq</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">KF</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="n">key_fn</span><span class="o">:</span> <span class="n">KF</span><span class="p">,</span>
+    <span class="n">logic</span><span class="o">:</span>  <span class="n">L</span><span class="p">,</span>
+    <span class="n">shards</span><span class="o">:</span> <span class="n">HashMap</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span> <span class="n">DifferentialShard</span><span class="o">&lt;</span><span class="n">S</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This isn’t particularly instructive yet. Let’s constrain the types and implement some methods.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">KF</span><span class="o">&gt;</span> <span class="n">DifferentialOperator</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">KF</span><span class="o">&gt;</span>
+<span class="n">where</span> <span class="n">K</span><span class="o">:</span> <span class="nb">Hash</span><span class="o">+</span><span class="nb">Eq</span><span class="p">,</span>
+      <span class="n">S</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">+</span><span class="nb">Clone</span><span class="p">,</span>
+      <span class="n">R</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">+</span><span class="nb">Clone</span><span class="p">,</span>
+      <span class="n">T</span><span class="o">:</span> <span class="n">PartialOrd</span><span class="o">+</span><span class="nb">Clone</span><span class="p">,</span>
+      <span class="n">L</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="o">&amp;</span><span class="n">K</span><span class="p">,</span> <span class="o">&amp;</span><span class="p">[(</span><span class="n">S</span><span class="p">,</span><span class="kt">i64</span><span class="p">)],</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">R</span><span class="p">,</span><span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">),</span>
+      <span class="n">KF</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="o">&amp;</span><span class="n">S</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">K</span> <span class="p">{</span>
+  <span class="c1">// .. rest of implementation broken out below ..</span></code></pre></div>
+
+<p>These constraints mean that our data <code>S</code> and <code>R</code> need to be totally ordered and clonable, and our index <code>T</code> needs to be partially ordered and clonable. We also have types <code>KF</code> and <code>L</code> corresponding to closures for our key function and operator logic. The key function must take a reference to a source record and produce a key, the operator logic must take a reference to a key, a reference to source data, and a populatable vector for result data. The logic is asked to work on pairs <code>(S,i64)</code> and <code>(R,i64)</code> in order to make my life easier, rather than <code>S</code> and <code>R</code> followed by accumulating the counts.</p>
+
+<p>Next we write a method to accept new input data, not yet grouped by key, which does the partitioning of source records and loads each of the groups into the appropriate <code>DifferentialShard</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">accept_source</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">data</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">S</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">stage</span> <span class="o">=</span> <span class="n">HashMap</span><span class="o">::</span><span class="n">new</span><span class="p">();</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">record</span><span class="p">,</span> <span class="n">delta</span><span class="p">)</span> <span class="k">in</span> <span class="n">data</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="n">key</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">key_fn</span><span class="p">)(</span><span class="o">&amp;</span><span class="n">record</span><span class="p">);</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">list</span> <span class="o">=</span> <span class="k">match</span> <span class="n">stage</span><span class="p">.</span><span class="n">entry</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">Occupied</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">into_mut</span><span class="p">(),</span>
+            <span class="n">Vacant</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>   <span class="o">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">()),</span>
+        <span class="p">};</span>
+        <span class="n">list</span><span class="p">.</span><span class="n">push</span><span class="p">((</span><span class="n">record</span><span class="p">,</span> <span class="n">delta</span><span class="p">));</span>
+    <span class="p">}</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="k">mut</span> <span class="n">list</span><span class="p">)</span> <span class="k">in</span> <span class="n">stage</span><span class="p">.</span><span class="n">drain</span><span class="p">()</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="n">shard</span> <span class="o">=</span> <span class="k">match</span> <span class="bp">self</span><span class="p">.</span><span class="n">shards</span><span class="p">.</span><span class="n">entry</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">Occupied</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">into_mut</span><span class="p">(),</span>
+            <span class="n">Vacant</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>   <span class="o">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">DifferentialShard</span><span class="o">::</span><span class="n">new</span><span class="p">()),</span>
+        <span class="p">};</span>
+        <span class="n">list</span><span class="p">.</span><span class="n">sort</span><span class="p">();</span> <span class="c1">// using orderedness to merge</span>
+        <span class="n">shard</span><span class="p">.</span><span class="n">source</span><span class="p">.</span><span class="n">setd</span><span class="p">(</span><span class="n">index</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">list</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>In principle, we could be stashing the input records at the ends of <code>shard.source.updates</code> rather than staging them first, but we would need to tweak the interface a bit to expose more than just <code>setd</code>.</p>
+
+<p>Finally, for now, we write a method to relate the source collection to result collection at a specific index, and to correct the result differences if they do not currently accumulate to the correct result collection.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">update_result</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">T</span><span class="p">,</span> <span class="n">output</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="p">(</span><span class="n">R</span><span class="p">,</span> <span class="kt">i64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">temp_src</span> <span class="o">=</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">temp_dst</span> <span class="o">=</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="n">logic</span> <span class="o">=</span> <span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">logic</span><span class="p">;</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">shard</span><span class="p">)</span> <span class="k">in</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">.</span><span class="n">shards</span> <span class="p">{</span>
+        <span class="n">temp_src</span><span class="p">.</span><span class="n">clear</span><span class="p">();</span> <span class="n">temp_dst</span><span class="p">.</span><span class="n">clear</span><span class="p">();</span>
+
+        <span class="c1">// fetch collection, run logic, compare</span>
+        <span class="n">shard</span><span class="p">.</span><span class="n">source</span><span class="p">.</span><span class="n">getc</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">temp_src</span><span class="p">);</span>
+        <span class="k">if</span> <span class="n">temp_src</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+            <span class="n">logic</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">temp_src</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">temp_dst</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="n">shard</span><span class="p">.</span><span class="n">result</span><span class="p">.</span><span class="n">setc</span><span class="p">(</span><span class="n">index</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">temp_dst</span><span class="p">);</span>
+
+        <span class="k">for</span> <span class="n">result</span> <span class="k">in</span> <span class="n">shard</span><span class="p">.</span><span class="n">result</span><span class="p">.</span><span class="n">getd</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>  <span class="p">{</span>
+            <span class="n">output</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>The main possibly surprising part (the part I got wrong the first time) is that we only want to call the logic on non-empty <code>temp_src</code> collections. This is an important part of correctness, as everything goes horribly wrong if we let <code>logic</code> produce output on empty collections; we don’t want to have to run it for all possible keys, but rather only the ones for which we’ve actually seen data.</p>
+
+<h2 id="trying-it-out">Trying it out!</h2>
+
+<p>Oh yeah! We wrote all that code, let’s see what it does. Here is an operator which counts the number of distinct strings with each length, producing a weird <code>(String, usize)</code> result pair for each length.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">vertex</span> <span class="o">=</span> <span class="n">DifferentialOperator</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="o">|</span><span class="n">x</span><span class="o">:&amp;&amp;</span><span class="kt">str</span><span class="o">|</span> <span class="n">x</span><span class="p">.</span><span class="n">len</span><span class="p">(),</span> <span class="o">|</span><span class="n">k</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">t</span><span class="o">|</span> <span class="p">{</span>
+        <span class="n">t</span><span class="p">.</span><span class="n">push</span><span class="p">(((</span><span class="n">format</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;length: {:?}&quot;</span><span class="p">,</span> <span class="n">k</span><span class="p">),</span> <span class="n">s</span><span class="p">.</span><span class="n">len</span><span class="p">()),</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="p">});</span>
+
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">result</span> <span class="o">=</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">();</span>
+    <span class="kd">let</span> <span class="n">sched</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[(</span><span class="n">Product</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[(</span><span class="s">&quot;a&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="s">&quot;cc&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)]),</span>
+                     <span class="p">(</span><span class="n">Product</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[(</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">,</span><span class="o">-</span><span class="mi">3</span><span class="p">)]),</span>
+                     <span class="p">(</span><span class="n">Product</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[(</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">)]),</span>
+                     <span class="p">(</span><span class="n">Product</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[(</span><span class="s">&quot;a&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)])];</span>
+
+    <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">differences</span><span class="p">)</span> <span class="k">in</span> <span class="n">sched</span> <span class="p">{</span>
+        <span class="n">result</span><span class="p">.</span><span class="n">clear</span><span class="p">();</span>
+        <span class="n">vertex</span><span class="p">.</span><span class="n">accept_source</span><span class="p">(</span><span class="n">index</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="n">differences</span><span class="p">);</span>
+        <span class="n">vertex</span><span class="p">.</span><span class="n">update_result</span><span class="p">(</span><span class="o">&amp;</span><span class="n">index</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">result</span><span class="p">);</span>
+        <span class="nb">println</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;difference[{:?}] : {:?}&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">index</span><span class="p">,</span> <span class="n">result</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Let’s go through the produced output line by line:</p>
+
+<p>First we see here the changes from the initially empty result collection to the output on the supplied source collection. We have two length-one strings and one length-two string:</p>
+
+<p><code>
+difference[(0, 0)] : [(("length: 1", 2), 1), (("length: 2", 1), 1)]
+</code></p>
+
+<p>Next we see what happens when we remove the length-one strings: we lose any record of “length: 1”:</p>
+
+<p><code>
+difference[(0, 1)] : [(("length: 1", 2), -1)]
+</code></p>
+
+<p>The next change is in a different coordinate, and doesn’t include the removal of the length-one strings that occurs at <code>(0, 1)</code>. Rather, it removes one of the two length-one strings and decrements the number of the other by one (though two occurences of “c” should still remain). The result is one distinct length-one string, and the way differential dataflow represents that is to subtract one record and add the other.</p>
+
+<p><code>
+difference[(1, 0)] : [(("length: 1", 1), 1), (("length: 1", 2), -1)]
+</code></p>
+
+<p>Although we might like to change the <code>2</code> to a <code>1</code> by directly subtracting one, those two values are now part of the data rather than the counts. If they had been formatted into the string instead, it would be clearer that this is not possible.</p>
+
+<p>Finally, we add back an “a” (as otherwise the total would be negative) and leave ourselves with one “b”. Index <code>(1,1)</code> has one length-one string, and so the output is naturally:</p>
+
+<p><code>
+difference[(1, 1)] : [(("length: 1", 2), 1)]
+</code></p>
+
+<p>Yeah, that last one isn’t obvious at all, is it?</p>
+
+<p>We would like the output to be <code>[(("length: 1", 1), 1), (("length: 2", 1), 1)]</code>, and the difference above is the right quantity to add in to make this be the case. We subtracted too many <code>[(("length: 1", 2), 1)]</code> records, at both <code>(0, 1)</code> and <code>(1, 0)</code>, and need to put one back.</p>
+
+<h2 id="things-yet-to-do">Things yet to do</h2>
+
+<p>The main issue that this example avoids is knowing on which indices to call <code>vertex.update_result</code>.</p>
+
+<p>For example, even if we had not had any input differences at <code>(1, 1)</code>, which would be odd as the counts for both “a” and “b” would go negative, we would still need to call <code>update_result</code>. The input difference at <code>(1, 0)</code> introduces the need to at least check the output at <code>(1, 1)</code>.</p>
+
+<p>If we just call <code>update_result</code> at <code>(1, 1)</code>, without adding source differences, we get the following:</p>
+
+<p><code>
+difference[(1, 1)] : [(("length: 1", 1), -1), (("length: 1", 2), 2)]
+</code></p>
+
+<p>Here we are told that we have too many reports of one length-one string, and need multiple reports of two length-one strings. This is because we were already short one such report, and there are now two length-one strings (though with negative counts; not something we paid attention to in our logic).</p>
+
+<p>Roughly, <code>difference[t]</code> can lead to result differences at <code>t</code> joined (in the partial order sense of least upper bound) with the join of any subset of pre-existing indices with non-empty differences.</p>
+
+<p>We should also be more careful about noting the subset of keys that need updating at a given index (we currently update  them all. Naughty!). This isn’t much more complicated than maintaining a <code>HashMap&lt;T, HashSet&lt;K&gt;&gt;</code>, populated by the join logic described above.</p>
+
+<p>None of this is too complicated to compute, but stitching it all together properly requires something like a timely dataflow system, where one can respond to source differences with a combination of result differences and notification requests (for checking possible result updates at future indices).</p>
+
+<p>Ideally the Rust ICE blocking me wiring all this together gets sorted out promptly, otherwise I will be forced to delight you with a post about worst-case optimal join processing in timely dataflow.</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
