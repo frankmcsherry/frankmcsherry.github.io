@@ -14,9 +14,9 @@ Seriously, you might actually want to wait. In the meantime, you can read this e
 
 ## Relational Joins
 
-A relational join is a pretty well studied thing, and I'm just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think a table; we'll call these relations $$R_1, R_2, \ldots R_k$$. There are also several attributes, which we will refer to as $$A_1, A_2, \ldots A_j$$. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.
+A relational join is a pretty well studied thing, and I'm just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think tables; we'll call these relations $$R_1, R_2, \ldots R_k$$. There are also several attributes, which we will refer to as $$A_1, A_2, \ldots A_j$$. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.
 
-The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection on to the attributes of each relation exists in that relation.
+The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.
 
 ### Ye Olde Methodologees
 
@@ -30,7 +30,7 @@ Relational joins have been around for such a long while, you might be a bit surp
 
 * The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.
 
-* There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce as output tuples.
+* There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.
 
 This second point doesn't mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at lesat have the excuse that they *might* have had to do it.
 
@@ -166,7 +166,7 @@ If we define a graph as a set of pairs `(src, dst)`, a triangle is defined as a 
 
 ### Defining a **PrefixExtender**
 
-We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will sort the destinations to make the intersection tests easier.
+We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will keep the destinations sorted to make the intersection tests easier.
 
 {% highlight rust %}
 pub struct GraphFragment<E: Ord> {
@@ -263,7 +263,7 @@ That being said, let's count some triangles! We'll do this in parts. I'm going t
 First we just write some code that from a `Communicator`, which indicates a worker's index and its number of peers, figures out what fragment of the graph this worker will load up and be responsible for. The code then prepares a dataflow computation and an input into which we will feed `a: u32` values. This is all timely dataflow boiler-plate, and not super exciting from an algorithmic point of view.
 
 {% highlight rust %}
-fn triangles<C, F>(communicator: C, graph_soure: F)
+fn triangles<C, F>(communicator: C, graph_source: F)
 where C: Communicator,
       F: Fn(u64,u64)->GraphFragment<u32> {
 
@@ -283,7 +283,7 @@ The next step is to create the extender from `a` to `(a,b)`. We just need to pai
     {% highlight rust %}
 //  // define an extender that uses 'a' to suggest x: '(a,x)' extensions
     let ext_b = vec![Box::new((graph.clone(), |&a| { a as u64 }))];
-    let mut pairs = let mut triangles = stream.extend(ext_b).flatten();
+    let mut pairs = stream.extend(ext_b).flatten();
     {% endhighlight %}
 
 That `flatten()` method simply converts a `Stream<G, (P, Vec<E>)>` to a `Stream<G, (P, E)>`. It is just 17 lines of code somewhere, so hooray for timely dataflow being easy to use (succint, at least).

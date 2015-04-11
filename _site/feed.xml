@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 11 Apr 2015 17:39:40 +0200</pubDate>
-    <lastBuildDate>Sat, 11 Apr 2015 17:39:40 +0200</lastBuildDate>
+    <pubDate>Sat, 11 Apr 2015 18:15:47 +0200</pubDate>
+    <lastBuildDate>Sat, 11 Apr 2015 18:15:47 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -19,9 +19,9 @@
 
 &lt;h2 id=&quot;relational-joins&quot;&gt;Relational Joins&lt;/h2&gt;
 
-&lt;p&gt;A relational join is a pretty well studied thing, and I’m just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think a table; we’ll call these relations &lt;script type=&quot;math/tex&quot;&gt;R_1, R_2, \ldots R_k&lt;/script&gt;. There are also several attributes, which we will refer to as &lt;script type=&quot;math/tex&quot;&gt;A_1, A_2, \ldots A_j&lt;/script&gt;. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.&lt;/p&gt;
+&lt;p&gt;A relational join is a pretty well studied thing, and I’m just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think tables; we’ll call these relations &lt;script type=&quot;math/tex&quot;&gt;R_1, R_2, \ldots R_k&lt;/script&gt;. There are also several attributes, which we will refer to as &lt;script type=&quot;math/tex&quot;&gt;A_1, A_2, \ldots A_j&lt;/script&gt;. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.&lt;/p&gt;
 
-&lt;p&gt;The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection on to the attributes of each relation exists in that relation.&lt;/p&gt;
+&lt;p&gt;The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.&lt;/p&gt;
 
 &lt;h3 id=&quot;ye-olde-methodologees&quot;&gt;Ye Olde Methodologees&lt;/h3&gt;
 
@@ -38,7 +38,7 @@
     &lt;p&gt;The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce as output tuples.&lt;/p&gt;
+    &lt;p&gt;There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.&lt;/p&gt;
   &lt;/li&gt;
 &lt;/ul&gt;
 
@@ -168,7 +168,7 @@ To fill out a full relational join we need to call &lt;code&gt;extend&lt;/code&g
 
 &lt;h3 id=&quot;defining-a-prefixextender&quot;&gt;Defining a &lt;strong&gt;PrefixExtender&lt;/strong&gt;&lt;/h3&gt;
 
-&lt;p&gt;We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will sort the destinations to make the intersection tests easier.&lt;/p&gt;
+&lt;p&gt;We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will keep the destinations sorted to make the intersection tests easier.&lt;/p&gt;
 
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;GraphFragment&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;E&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Ord&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
     &lt;span class=&quot;n&quot;&gt;nodes&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;usize&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
@@ -255,7 +255,7 @@ To fill out a full relational join we need to call &lt;code&gt;extend&lt;/code&g
 
 &lt;p&gt;First we just write some code that from a &lt;code&gt;Communicator&lt;/code&gt;, which indicates a worker’s index and its number of peers, figures out what fragment of the graph this worker will load up and be responsible for. The code then prepares a dataflow computation and an input into which we will feed &lt;code&gt;a: u32&lt;/code&gt; values. This is all timely dataflow boiler-plate, and not super exciting from an algorithmic point of view.&lt;/p&gt;
 
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;triangles&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;C&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;F&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;communicator&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;graph_soure&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;F&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;triangles&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;C&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;F&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;communicator&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;graph_source&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;F&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
 &lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Communicator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
       &lt;span class=&quot;n&quot;&gt;F&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Fn&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u64&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u64&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;GraphFragment&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
 
@@ -271,7 +271,7 @@ To fill out a full relational join we need to call &lt;code&gt;extend&lt;/code&g
 
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;c1&quot;&gt;//  // define an extender that uses &amp;#39;a&amp;#39; to suggest x: &amp;#39;(a,x)&amp;#39; extensions&lt;/span&gt;
     &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ext_b&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Box&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;graph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clone&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;a&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;a&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;as&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;u64&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}))];&lt;/span&gt;
-    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pairs&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;triangles&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;stream&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;extend&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ext_b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flatten&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pairs&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;stream&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;extend&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ext_b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flatten&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 
 &lt;p&gt;That &lt;code&gt;flatten()&lt;/code&gt; method simply converts a &lt;code&gt;Stream&amp;lt;G, (P, Vec&amp;lt;E&amp;gt;)&amp;gt;&lt;/code&gt; to a &lt;code&gt;Stream&amp;lt;G, (P, E)&amp;gt;&lt;/code&gt;. It is just 17 lines of code somewhere, so hooray for timely dataflow being easy to use (succint, at least).&lt;/p&gt;
 

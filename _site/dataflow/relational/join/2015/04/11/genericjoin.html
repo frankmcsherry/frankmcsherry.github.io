@@ -72,9 +72,9 @@
 
 <h2 id="relational-joins">Relational Joins</h2>
 
-<p>A relational join is a pretty well studied thing, and I’m just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think a table; we’ll call these relations <script type="math/tex">R_1, R_2, \ldots R_k</script>. There are also several attributes, which we will refer to as <script type="math/tex">A_1, A_2, \ldots A_j</script>. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.</p>
+<p>A relational join is a pretty well studied thing, and I’m just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think tables; we’ll call these relations <script type="math/tex">R_1, R_2, \ldots R_k</script>. There are also several attributes, which we will refer to as <script type="math/tex">A_1, A_2, \ldots A_j</script>. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.</p>
 
-<p>The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection on to the attributes of each relation exists in that relation.</p>
+<p>The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.</p>
 
 <h3 id="ye-olde-methodologees">Ye Olde Methodologees</h3>
 
@@ -91,7 +91,7 @@
     <p>The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.</p>
   </li>
   <li>
-    <p>There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce as output tuples.</p>
+    <p>There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.</p>
   </li>
 </ul>
 
@@ -221,7 +221,7 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
 
 <h3 id="defining-a-prefixextender">Defining a <strong>PrefixExtender</strong></h3>
 
-<p>We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will sort the destinations to make the intersection tests easier.</p>
+<p>We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will keep the destinations sorted to make the intersection tests easier.</p>
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">struct</span> <span class="n">GraphFragment</span><span class="o">&lt;</span><span class="n">E</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">&gt;</span> <span class="p">{</span>
     <span class="n">nodes</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">usize</span><span class="o">&gt;</span><span class="p">,</span>
@@ -308,7 +308,7 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
 
 <p>First we just write some code that from a <code>Communicator</code>, which indicates a worker’s index and its number of peers, figures out what fragment of the graph this worker will load up and be responsible for. The code then prepares a dataflow computation and an input into which we will feed <code>a: u32</code> values. This is all timely dataflow boiler-plate, and not super exciting from an algorithmic point of view.</p>
 
-<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">triangles</span><span class="o">&lt;</span><span class="n">C</span><span class="p">,</span> <span class="n">F</span><span class="o">&gt;</span><span class="p">(</span><span class="n">communicator</span><span class="o">:</span> <span class="n">C</span><span class="p">,</span> <span class="n">graph_soure</span><span class="o">:</span> <span class="n">F</span><span class="p">)</span>
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">triangles</span><span class="o">&lt;</span><span class="n">C</span><span class="p">,</span> <span class="n">F</span><span class="o">&gt;</span><span class="p">(</span><span class="n">communicator</span><span class="o">:</span> <span class="n">C</span><span class="p">,</span> <span class="n">graph_source</span><span class="o">:</span> <span class="n">F</span><span class="p">)</span>
 <span class="n">where</span> <span class="n">C</span><span class="o">:</span> <span class="n">Communicator</span><span class="p">,</span>
       <span class="n">F</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="kt">u64</span><span class="p">,</span><span class="kt">u64</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">GraphFragment</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span> <span class="p">{</span>
 
@@ -324,7 +324,7 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">//  // define an extender that uses &#39;a&#39; to suggest x: &#39;(a,x)&#39; extensions</span>
     <span class="kd">let</span> <span class="n">ext_b</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="n">a</span><span class="o">|</span> <span class="p">{</span> <span class="n">a</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">}))];</span>
-    <span class="kd">let</span> <span class="k">mut</span> <span class="n">pairs</span> <span class="o">=</span> <span class="kd">let</span> <span class="k">mut</span> <span class="n">triangles</span> <span class="o">=</span> <span class="n">stream</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">ext_b</span><span class="p">).</span><span class="n">flatten</span><span class="p">();</span></code></pre></div>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">pairs</span> <span class="o">=</span> <span class="n">stream</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">ext_b</span><span class="p">).</span><span class="n">flatten</span><span class="p">();</span></code></pre></div>
 
 <p>That <code>flatten()</code> method simply converts a <code>Stream&lt;G, (P, Vec&lt;E&gt;)&gt;</code> to a <code>Stream&lt;G, (P, E)&gt;</code>. It is just 17 lines of code somewhere, so hooray for timely dataflow being easy to use (succint, at least).</p>
 
