@@ -314,14 +314,14 @@ Ok, we've got the data loaded up, the computation defined, and are ready to go. 
     computation.0.borrow_mut().set_external_summary(Vec::new(), &mut Vec::new());
 
     // introduce u32s to find triangles rooted from them
-    for node in (0..fragment.borrow().nodes.len()) {
+    for node in (0..graph.borrow().nodes.len()) {
         input.send_messages(&((), node as u64), vec![node as u32]);
         input.advance(&((), node as u64), &((), node as u64 + 1));
         computation.0.borrow_mut().step();
     }
 
     // close input and finish any computation
-    input.close_at(&((), fragment.borrow().nodes.len() as u64));
+    input.close_at(&((), graph.borrow().nodes.len() as u64));
     while computation.0.borrow_mut().step() { }
 }
 {% endhighlight %}
@@ -335,8 +335,8 @@ Good point. Although we went through all nodes in order, to enumerate all triang
 {% highlight rust %}
 for epoch in (0..) {
     let node = read_u32_from_console(); // not a real function!
-    input.send_messages(&((), epoch as u64), vec![node as u32]);
-    input.advance(&((), epoch as u64), &((), epoch as u64 + 1));
+    input.send_messages(&((), epoch), vec![node]);
+    input.advance(&((), epoch), &((), epoch + 1));
     computation.0.borrow_mut().step();
 }
 {% endhighlight %}
@@ -414,14 +414,14 @@ What about:
 
 I can keep going (seriously, I wrote a program to do it).
 
-Arbitrary graph motifs finding (small subgraphs you want to find in a large graph) is really easy to write. I'm sure there is lots of smarter research on how to do it will, but this is worst-case optimal, at least.
+Arbitrary graph motif finding (small subgraphs you want to find in a large graph) is really easy to write. I'm sure there is lots of smarter research on how to do it will, but this is worst-case optimal, at least.
 
 ## Wrap-up
 
 There is some seriously cool work going on in join research. It isn't nearly as stale as I thought is was.
 But, importantly, these new algorithms need better systems than your bog-standard batch processors.
 
-How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know [Naiad can](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join), and [other stream processors](https://flink.apache.org) should be able to. Being bad at things just isn't cool.
+How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know [Naiad can](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join), and [Flink](https://flink.apache.org) should be able to. Being bad at things just isn't cool.
 
 From my point of view, I now have a cool problem I can use to tune [timely dataflow](https://github.com/frankmcsherry/timely-dataflow). I would expect it to start getting better and more usable (and I'll probably actually try it in more configurations now too).
 

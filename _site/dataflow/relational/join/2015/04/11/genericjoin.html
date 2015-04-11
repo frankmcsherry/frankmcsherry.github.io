@@ -348,14 +348,14 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
     <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">set_external_summary</span><span class="p">(</span><span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">(),</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">());</span>
 
     <span class="c1">// introduce u32s to find triangles rooted from them</span>
-    <span class="k">for</span> <span class="n">node</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">fragment</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">())</span> <span class="p">{</span>
+    <span class="k">for</span> <span class="n">node</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">graph</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">())</span> <span class="p">{</span>
         <span class="n">input</span><span class="p">.</span><span class="n">send_messages</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">node</span> <span class="k">as</span> <span class="kt">u32</span><span class="p">]);</span>
         <span class="n">input</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
         <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">();</span>
     <span class="p">}</span>
 
     <span class="c1">// close input and finish any computation</span>
-    <span class="n">input</span><span class="p">.</span><span class="n">close_at</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">fragment</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">));</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">close_at</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">graph</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">));</span>
     <span class="k">while</span> <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">()</span> <span class="p">{</span> <span class="p">}</span>
 <span class="p">}</span></code></pre></div>
 
@@ -367,8 +367,8 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">for</span> <span class="n">epoch</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.)</span> <span class="p">{</span>
     <span class="kd">let</span> <span class="n">node</span> <span class="o">=</span> <span class="n">read_u32_from_console</span><span class="p">();</span> <span class="c1">// not a real function!</span>
-    <span class="n">input</span><span class="p">.</span><span class="n">send_messages</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">node</span> <span class="k">as</span> <span class="kt">u32</span><span class="p">]);</span>
-    <span class="n">input</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">send_messages</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">node</span><span class="p">]);</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span><span class="p">),</span> <span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
     <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">();</span>
 <span class="p">}</span></code></pre></div>
 
@@ -449,14 +449,14 @@ enumerated 6-cliques from (4..5) in 87148ns
 
 <p>I can keep going (seriously, I wrote a program to do it).</p>
 
-<p>Arbitrary graph motifs finding (small subgraphs you want to find in a large graph) is really easy to write. I’m sure there is lots of smarter research on how to do it will, but this is worst-case optimal, at least.</p>
+<p>Arbitrary graph motif finding (small subgraphs you want to find in a large graph) is really easy to write. I’m sure there is lots of smarter research on how to do it will, but this is worst-case optimal, at least.</p>
 
 <h2 id="wrap-up">Wrap-up</h2>
 
 <p>There is some seriously cool work going on in join research. It isn’t nearly as stale as I thought is was.
 But, importantly, these new algorithms need better systems than your bog-standard batch processors.</p>
 
-<p>How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know <a href="https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join">Naiad can</a>, and <a href="https://flink.apache.org">other stream processors</a> should be able to. Being bad at things just isn’t cool.</p>
+<p>How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know <a href="https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join">Naiad can</a>, and <a href="https://flink.apache.org">Flink</a> should be able to. Being bad at things just isn’t cool.</p>
 
 <p>From my point of view, I now have a cool problem I can use to tune <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a>. I would expect it to start getting better and more usable (and I’ll probably actually try it in more configurations now too).</p>
 
