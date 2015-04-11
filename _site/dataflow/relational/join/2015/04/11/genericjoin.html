@@ -298,7 +298,7 @@ To fill out a full relational join we need to call <code>extend</code> multiple 
     <span class="k">else</span> <span class="p">{</span> <span class="n">slice</span> <span class="p">}</span>
 <span class="p">}</span></code></pre></div>
 
-<p>The <code>gallop</code> method can use any slice as input, and we give it a slice cut out of the graph’s edge list. If we mis-use the result slice there could be a risk of horrible aliasing, data races, de-, or re-allocation. Rust can confirm that none of this happens and just lets us use the same memory. It does this through <code>retain</code>’s closure, through a method I wrote (<code>gallop</code>), and through lots of weird logic. This is great!</p>
+<p>The <code>gallop</code> method can use any slice as input, and we give it a slice cut out of the graph’s edge list. If we mis-use the result slice there could be a horrible risk of aliasing, data races, de-, or re-allocation. Rust can confirm that none of this happens and just lets us use the same memory. It does this through <code>retain</code>’s closure, through a method I wrote (<code>gallop</code>), and through lots of weird logic. This is great!</p>
 
 <h3 id="building-the-triangles-query">Building the triangles query</h3>
 

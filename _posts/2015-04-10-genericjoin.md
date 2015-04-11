@@ -250,7 +250,7 @@ pub fn gallop<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
 }
 {% endhighlight %}
 
-The `gallop` method can use any slice as input, and we give it a slice cut out of the graph's edge list. If we mis-use the result slice there could be a risk of horrible aliasing, data races, de-, or re-allocation. Rust can confirm that none of this happens and just lets us use the same memory. It does this through `retain`'s closure, through a method I wrote (`gallop`), and through lots of weird logic. This is great!
+The `gallop` method can use any slice as input, and we give it a slice cut out of the graph's edge list. If we mis-use the result slice there could be a horrible risk of aliasing, data races, de-, or re-allocation. Rust can confirm that none of this happens and just lets us use the same memory. It does this through `retain`'s closure, through a method I wrote (`gallop`), and through lots of weird logic. This is great!
 
 ### Building the triangles query
 
