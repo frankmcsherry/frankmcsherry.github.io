@@ -421,7 +421,9 @@ Arbitrary graph motif finding (small subgraphs you want to find in a large graph
 There is some seriously cool work going on in join research. It isn't nearly as stale as I thought is was.
 But, importantly, these new algorithms need better systems than your bog-standard batch processors.
 
-How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know [Naiad can](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join), and [Flink](https://flink.apache.org) should be able to. Being bad at things just isn't cool.
+How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? Being bad at things stopped being cool in high school...
+
+On the positive side, in addition to this code, [Naiad can do all this](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join), and [Flink](https://flink.apache.org) should be able to as well.
 
 From my point of view, I now have a cool problem I can use to tune [timely dataflow](https://github.com/frankmcsherry/timely-dataflow). I would expect it to start getting better and more usable (and I'll probably actually try it in more configurations now too).
 
