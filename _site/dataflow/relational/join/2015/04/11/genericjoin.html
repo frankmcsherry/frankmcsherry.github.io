@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+
+    <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Worst-case optimal joins, in dataflow</title>
+  <meta name="description" content="I’ve gotten  timely dataflow in Rust up and running exciting computations! I’m going to explain one that I think is especially cool, and that I’m going to tr...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Worst-case optimal joins, in dataflow</h1>
+    <p class="post-meta">Apr 11, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p>I’ve gotten  <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow in Rust</a> up and running exciting computations! I’m going to explain one that I think is especially cool, and that I’m going to try using for some performance analysis of the underlying system (the system has so far been subjected only to latency micro-benchmarks …).</p>
+
+<p>The code for everything I’ll talk about is <a href="https://github.com/frankmcsherry/dataflow_join">available online</a>. It isn’t particularly pretty yet, but just you wait.</p>
+
+<p>Seriously, you might actually want to wait. In the meantime, you can read this excellent post!</p>
+
+<h2 id="relational-joins">Relational Joins</h2>
+
+<p>A relational join is a pretty well studied thing, and I’m just going to lay some bare bones description here so that we have some common terminology. The problem starts with a collection of relations, think a table; we’ll call these relations <script type="math/tex">R_1, R_2, \ldots R_k</script>. There are also several attributes, which we will refer to as <script type="math/tex">A_1, A_2, \ldots A_j</script>. Each relation names some subset of these attributes, and each element in the relation has a value for each named attribute. Not all relations need to use the same set of attributes.</p>
+
+<p>The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection on to the attributes of each relation exists in that relation.</p>
+
+<h3 id="ye-olde-methodologees">Ye Olde Methodologees</h3>
+
+<p>There are many ways to go about doing a binary join, between two relations, but the simplest is a hash-join, where you look at the attributes in common between the two relations and hash each tuple based on their restriction to those attributes. For each pair of matching tuples (one from each relation), you form the extended tuple that takes the union of the attributes of the relations.</p>
+
+<p>To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a “plan”, which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together. Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.</p>
+
+<h3 id="more-recent-work">More recent work</h3>
+
+<p>Relational joins have been around for such a long while, you might be a bit surprised to learn that there is still new work going on here. You might be even more surprised to learn that, in some respects, folks have been doing it wrong for quite some time. This is exactly what <a href="http://arxiv.org/abs/1310.3314">Ngo et al</a> observe, in awesome work:</p>
+
+<ul>
+  <li>
+    <p>The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.</p>
+  </li>
+  <li>
+    <p>There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce as output tuples.</p>
+  </li>
+</ul>
+
+<p>This second point doesn’t mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at lesat have the excuse that they <em>might</em> have had to do it.</p>
+
+<p>You know who doesn’t even have that excuse? The standard approaches to computing relational joins</p>
+
+<h2 id="generic-join">Generic Join</h2>
+
+<p>The algorithm that Ngo et al detail is really quite general. They even call the algorithm GenericJoin.</p>
+
+<p>I’m going to focus on a specific realization of it. I should say at this point that the specific realization is due to other people, not me. I’m not really sure who gets credit, but Semih Salihoghlu and Chris Ré are the ones that taught me about worst-case join processing, and it was with Semih, Chris, and Michael Isard that we banged out <a href="https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join">the first version of this in Naiad</a>.</p>
+
+<h3 id="specific-join">Specific Join</h3>
+
+<p>Rather than think of adding in relations one at a time, the way classical join processing might, we are going to think about adding in <em>attributes</em> one at a time.</p>
+
+<p>Imagine we had the join on attributes <script type="math/tex">A_1, \ldots A_i</script>, and want to output the join on attributes <script type="math/tex">A_1, \ldots A_{i+1}</script>.
+For each <script type="math/tex">(a_1, \ldots a_i)</script> we want to produce the set of <script type="math/tex">(a_1, \ldots a_{i+1})</script> supported by each relation <script type="math/tex">R_j</script>.</p>
+
+<p>The easiest way to do this is just to ask each <script type="math/tex">R_j</script>: “what extensions <script type="math/tex">a_{i+1}</script> do you support for <script type="math/tex">(a_1, \ldots a_i)</script>?” For each <script type="math/tex">(a_1, \ldots a_i)</script> we intersect their results, and return <script type="math/tex">(a_1, \ldots a_{i+1})</script> for each <script type="math/tex">a_{i+1}</script> in the intersection.</p>
+
+<p>Of course, to ask the relations for the extensions and get the answer back quickly, each relation needs to be indexed by each prefix of attributes. This introduces redundancy, but we are going to work with it.</p>
+
+<h3 id="smarter-join">Smarter Join</h3>
+
+<p>Nothing about this algorithm is smart yet, but what Ngo et al observe is that if you do this intersection <em>carefully</em>, you get a worst-case optimal join algorithm.  The specific care you have to take is, for each <script type="math/tex">(a_1, \ldots a_i)</script>, only do work proportional to the <em>smallest</em> set of candidate extensions from any relation <script type="math/tex">R_j</script>. Rather than just intersect everything willy-nilly, we have to start with the smallest and work our way up.</p>
+
+<p>Fortunately, computing the intersection of a small set with a large set is something that can take time roughly linear in the size of the smaller set. You can either hash everything all over the place, or eat a logarithmic factor (they are ok with that) using various binary search techniques.</p>
+
+<p>But, let’s look for a second and make sure we understand this. For each <script type="math/tex">(a_1, \ldots a_i)</script> we have to ask a <em>data-dependent</em> relation to propose some extensions, and then ask the other relations to validate them. There isn’t a static plan saying “everyone first ask <script type="math/tex">R_1</script>, then <script type="math/tex">R_7</script>, then ..”; rather than pipeline records through relations, like a traditional join plan might, we are going to exchange them all over the place.</p>
+
+<p>“Exchange”, you say? I hope you can see where this is going.</p>
+
+<h2 id="a-rust-implementation">A Rust implementation</h2>
+
+<p>Obviously we were going to do this. Don’t act surprised.</p>
+
+<h3 id="some-abstractions">Some abstractions</h3>
+
+<p>Do we really want relations and tuples all over the place in our code? No! Let’s do some abstraction.</p>
+
+<p>From the discussion above we can see that we really only need a few things from a relation:</p>
+
+<ol>
+  <li>It should be able to report how many extensions it would propose for <script type="math/tex">(a_1, \ldots a_i)</script>.</li>
+  <li>It should be able to propose specific extensions for <script type="math/tex">(a_1, \ldots a_i)</script>.</li>
+  <li>It should be able to intersect proposed extensions for <script type="math/tex">(a_1, \ldots a_i)</script> with its extensions.</li>
+</ol>
+
+<p>So let’s write a trait that does this. I’m going to call the tasks above “count”, “propose”, and “intersect”.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">PrefixExtender</span><span class="o">&lt;</span><span class="n">Prefix</span><span class="p">,</span> <span class="n">Extension</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">count</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">Prefix</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">u64</span><span class="p">;</span>
+    <span class="k">fn</span> <span class="n">propose</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">Prefix</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Extension</span><span class="o">&gt;</span><span class="p">;</span>
+    <span class="k">fn</span> <span class="n">intersect</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">Prefix</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Extension</span><span class="o">&gt;</span><span class="p">);</span>
+<span class="p">}</span></code></pre></div>
+
+<p>I think this is as promised. This is what a relation needs to implement for us to be able to extend an element of type <code>Prefix</code> (think tuples <script type="math/tex">(a_1, \ldots a_i)</script>) with an element of type <code>Extension</code> (think <script type="math/tex">a_{i+1}</script>).</p>
+
+<p>To actually make computation happen, I’m going to introduce a interface that is bit more complicated, where the data are not individual records, but rather streams of records (in the timely dataflow sense). The records will carry some more information around with them to work in dataflow; for example we use triples <code>(prefix: P, count: u64, index: u64)</code> to indicate the least count and relation for a prefix.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">Graph</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">count</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="kt">u64</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="kt">u64</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+    <span class="k">fn</span> <span class="n">propose</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+    <span class="k">fn</span> <span class="n">intersect</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Although we are going to <em>use</em> this interface, you don’t need to know too much about about this. The main thing to know is that there are about fifty fairly predictable lines of code that go and implement a <code>StreamPrefixExtender&lt;G, P, E&gt;</code> for any type implementing <code>PrefixExtender&lt;P, E&gt;</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="p">,</span> <span class="n">PE</span><span class="o">&gt;</span> <span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="k">for</span> <span class="n">Rc</span><span class="o">&lt;</span><span class="n">RefCell</span><span class="o">&lt;</span><span class="n">PE</span><span class="o">&gt;&gt;</span>
+<span class="n">where</span> <span class="n">PE</span><span class="o">:</span> <span class="n">PrefixExtender</span><span class="o">&lt;</span><span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="c1">// implement methods up there, using logic from PrefixExtender PE</span>
+<span class="p">}</span></code></pre></div>
+
+<h3 id="specific-join-in-rust">Specific Join in Rust</h3>
+
+<p>With these abstractions, we are now ready to build a layer of the specific join algorithm. Before we do, let’s see what that would mean.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">SpecificJoinExt</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">extend</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">extenders</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Box</span><span class="o">&lt;</span><span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;&gt;&gt;</span><span class="p">)</span>
+        <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span></code></pre></div>
+
+<p>We need to write a method for <code>Stream&lt;G, P&gt;</code> that, given a vector of arbitrary things implementing the <code>StreamPrefixExtender&lt;G, P, E&gt;</code> trait, produces a stream of pairs <code>(P, Vec&lt;E&gt;)</code>. Also, we have to do it in the smart way described above, otherwise we’ll go slow like all the creaky database systems.</p>
+
+<p>I’m just going to show you the code, but the comments should talk you through it. It’s just like we said.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">Graph</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="n">SpecificJoinExt</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="k">for</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">extend</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">extenders</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">Box</span><span class="o">&lt;</span><span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;&gt;&gt;</span><span class="p">)</span>
+            <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span> <span class="p">{</span>
+
+        <span class="c1">// start with horrible proposals from a non-relation</span>
+        <span class="c1">// ask each extender to try to improve each proposal</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">counts</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">select</span><span class="p">(</span><span class="o">|</span><span class="n">p</span><span class="o">|</span> <span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">63</span><span class="p">,</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">63</span><span class="p">));</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">extenders</span><span class="p">.</span><span class="n">len</span><span class="p">())</span> <span class="p">{</span>
+            <span class="n">counts</span> <span class="o">=</span> <span class="n">extenders</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">count</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="n">counts</span><span class="p">,</span> <span class="n">index</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="c1">// for each of the extenders ...</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">results</span> <span class="o">=</span> <span class="n">Stream</span><span class="o">::</span><span class="n">empty</span><span class="p">();</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">extenders</span><span class="p">.</span><span class="n">len</span><span class="p">())</span> <span class="p">{</span>
+            <span class="c1">// find the prefixes the extender &quot;won&quot; the right to extend</span>
+            <span class="kd">let</span> <span class="k">mut</span> <span class="n">nominations</span> <span class="o">=</span> <span class="n">counts</span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">move</span> <span class="o">|</span><span class="n">p</span><span class="o">|</span> <span class="n">p</span><span class="p">.</span><span class="mi">2</span> <span class="o">==</span> <span class="n">index</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">)</span>
+                                        <span class="p">.</span><span class="n">select</span><span class="p">(</span><span class="o">|</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">)</span><span class="o">|</span> <span class="n">x</span><span class="p">);</span>
+
+            <span class="c1">// get the extensions and ask each other extender to validate</span>
+            <span class="kd">let</span> <span class="k">mut</span> <span class="n">extensions</span> <span class="o">=</span> <span class="n">extenders</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">propose</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="n">nominations</span><span class="p">);</span>
+            <span class="k">for</span> <span class="n">other</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">extenders</span><span class="p">.</span><span class="n">len</span><span class="p">()).</span><span class="n">filter</span><span class="p">(</span><span class="o">|&amp;</span><span class="n">x</span><span class="o">|</span> <span class="n">x</span> <span class="o">!=</span> <span class="n">index</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">extensions</span> <span class="o">=</span> <span class="n">extenders</span><span class="p">[</span><span class="n">other</span><span class="p">].</span><span class="n">intersect</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="n">extensions</span><span class="p">);</span>
+            <span class="p">}</span>
+
+            <span class="c1">// fold surviving extensions into the output</span>
+            <span class="n">results</span> <span class="o">=</span> <span class="n">results</span><span class="p">.</span><span class="n">concat</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span> <span class="n">extensions</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="k">return</span> <span class="n">results</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This is the whole algorithm. It is really not super complicated. Rather, that is one layer of the algorithm.
+To fill out a full relational join we need to call <code>extend</code> multiple times, with different <code>PrefixExtender</code> objects wrapping the same relations, just for different lengths of prefix. Let’s do an example.</p>
+
+<h2 id="a-low-latency-triangle-enumerator">A low-latency triangle enumerator</h2>
+
+<p>If we define a graph as a set of pairs <code>(src, dst)</code>, a triangle is defined as a triple <code>(a,b,c)</code> where <code>(a,b)</code>, <code>(b,c)</code>, and <code>(a,c)</code> are each in the set of pairs. We can think of the triangles query as a relational join over three relations, which are the same data just bound to different pairs of attributes.</p>
+
+<h3 id="defining-a-prefixextender">Defining a <strong>PrefixExtender</strong></h3>
+
+<p>We will represent a fragment of graph by a list of destinations and offsets into this list for each vertex. For each interval, we will sort the destinations to make the intersection tests easier.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">struct</span> <span class="n">GraphFragment</span><span class="o">&lt;</span><span class="n">E</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="n">nodes</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">usize</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="n">edges</span><span class="o">:</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span></code></pre></div>
+
+<p>We’ll just write a quick helper function to let use get at the edges associated with a node:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">E</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">&gt;</span> <span class="n">GraphFragment</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="n">edges</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="o">:</span> <span class="n">usize</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">&amp;</span><span class="p">[</span><span class="n">E</span><span class="p">]</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="n">node</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="p">.</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="p">{</span>
+            <span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">edges</span><span class="p">[</span><span class="bp">self</span><span class="p">.</span><span class="n">nodes</span><span class="p">[</span><span class="n">node</span><span class="p">]..</span><span class="bp">self</span><span class="p">.</span><span class="n">nodes</span><span class="p">[</span><span class="n">node</span><span class="o">+</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="p">}</span>
+        <span class="k">else</span> <span class="p">{</span> <span class="o">&amp;</span><span class="p">[]</span> <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>It is worth pointing out that Rust is doing some very clever things under the hood here. It notices that we are returning a reference to some memory, the type <code>&amp;[E]</code>, and that the only thing this could refer to is <code>&amp;self</code>. Rust then sets up the lifetime bound for the output to be that of <code>&amp;self</code> and will ensure that when we use the result it is not allowed to out-live <code>self</code> itself.</p>
+
+<p>I’m going to lie a little and present a simplified sketch of the <code>PrefixExtender</code> for <code>GraphFragment</code>. The simplified version uses a reference-counted  <code>GraphFragment</code>, all that <code>Rc&lt;RefCell&lt;...&gt;&gt;</code> stuff. This allows us to have just one copy of the graph loaded and to share it out between folks who need it. We also need a helper function of type <code>L: Fn(&amp;P)-&gt;u64</code> to extract a node identifier from the type <code>P</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="p">,</span> <span class="n">L</span><span class="o">&gt;</span> <span class="n">PrefixExtender</span><span class="o">&lt;</span><span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="k">for</span> <span class="p">(</span><span class="n">Rc</span><span class="o">&lt;</span><span class="n">RefCell</span><span class="o">&lt;</span><span class="n">GraphFragment</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span> <span class="n">L</span><span class="p">)</span>
+<span class="n">where</span> <span class="n">E</span><span class="o">:</span> <span class="nb">Ord</span><span class="p">,</span> <span class="n">L</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="o">&amp;</span><span class="n">P</span><span class="p">)</span><span class="o">-&gt;</span><span class="kt">u64</span> <span class="p">{</span>
+    <span class="c1">// counting is just looking up the edges</span>
+    <span class="k">fn</span> <span class="n">count</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">prefix</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">P</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">u64</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="o">&amp;</span><span class="p">(</span><span class="k">ref</span> <span class="n">graph</span><span class="p">,</span> <span class="k">ref</span> <span class="n">logic</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="p">;</span>
+        <span class="kd">let</span> <span class="n">node</span> <span class="o">=</span> <span class="n">logic</span><span class="p">(</span><span class="o">&amp;</span><span class="n">prev</span><span class="p">.</span><span class="mi">0</span><span class="p">)</span> <span class="k">as</span> <span class="n">usize</span><span class="p">;</span>
+        <span class="n">graph</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">edges</span><span class="p">(</span><span class="n">node</span><span class="p">).</span><span class="n">len</span><span class="p">()</span> <span class="k">as</span> <span class="kt">u64</span>
+    <span class="p">}</span>
+
+    <span class="c1">// proposing is just reporting the slice back</span>
+    <span class="k">fn</span> <span class="n">propose</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">prefix</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">P</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="o">&amp;</span><span class="p">(</span><span class="k">ref</span> <span class="n">graph</span><span class="p">,</span> <span class="k">ref</span> <span class="n">logic</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="p">;</span>
+        <span class="kd">let</span> <span class="n">node</span> <span class="o">=</span> <span class="n">logic</span><span class="p">(</span><span class="n">prefix</span><span class="p">)</span> <span class="k">as</span> <span class="n">usize</span><span class="p">;</span>
+        <span class="n">graph</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">edges</span><span class="p">(</span><span class="n">node</span><span class="p">).</span><span class="n">to_vec</span><span class="p">()</span>
+    <span class="p">}</span>
+
+    <span class="c1">// intersection &#39;gallops&#39; through a sorted list to find matches</span>
+    <span class="c1">// what is &quot;galloping&quot;, you ask? details coming in just a moment</span>
+    <span class="k">fn</span> <span class="n">intersect</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="n">prefix</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">P</span><span class="p">,</span> <span class="n">list</span><span class="o">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="o">&amp;</span><span class="p">(</span><span class="k">ref</span> <span class="n">graph</span><span class="p">,</span> <span class="k">ref</span> <span class="n">logic</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="p">;</span>
+        <span class="kd">let</span> <span class="n">node</span> <span class="o">=</span> <span class="n">logic</span><span class="p">(</span><span class="n">prefix</span><span class="p">)</span> <span class="k">as</span> <span class="n">usize</span><span class="p">;</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">slice</span> <span class="o">=</span> <span class="n">graph</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">edges</span><span class="p">(</span><span class="n">node</span><span class="p">);</span>
+        <span class="n">list</span><span class="p">.</span><span class="n">retain</span><span class="p">(</span><span class="n">move</span> <span class="o">|</span><span class="n">value</span><span class="o">|</span> <span class="p">{</span>
+            <span class="n">slice</span> <span class="o">=</span> <span class="n">gallop</span><span class="p">(</span><span class="n">slice</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span> <span class="c1">// skips past elements &lt; value</span>
+            <span class="n">slice</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">value</span>
+        <span class="p">});</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>That was pretty easy, huh? It sure was a lot messier before I wrote that <code>edges(node)</code> helper method. It is also a bit grottier when I’m not lying about how things work, but let’s not let that get between us.</p>
+
+<p>In the interest of completeness (and eyeballs on my code) let’s look at the implementation of <code>gallop</code>. From an input slice and value, it skips forward in exponentially increasing steps, and then once it would overshoot the target value it moves forward in exponentially shrinking steps.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">// advances slice to the first element not less than value.</span>
+<span class="k">pub</span> <span class="k">fn</span> <span class="n">gallop</span><span class="o">&lt;</span><span class="nl">&#39;a</span><span class="p">,</span> <span class="n">T</span><span class="o">:</span> <span class="nb">Ord</span><span class="o">&gt;</span><span class="p">(</span><span class="k">mut</span> <span class="n">slice</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">&#39;a</span> <span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">value</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">&amp;</span><span class="n">&#39;a</span> <span class="p">[</span><span class="n">T</span><span class="p">]</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="n">slice</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">value</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="k">mut</span> <span class="n">step</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="k">while</span> <span class="n">step</span> <span class="o">&lt;</span> <span class="n">slice</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&amp;&amp;</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="n">step</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">value</span> <span class="p">{</span>
+            <span class="n">slice</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="n">step</span><span class="p">..];</span>
+            <span class="n">step</span> <span class="o">=</span> <span class="n">step</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="n">step</span> <span class="o">=</span> <span class="n">step</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="k">while</span> <span class="n">step</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+            <span class="k">if</span> <span class="n">step</span> <span class="o">&lt;</span> <span class="n">slice</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&amp;&amp;</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="n">step</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">value</span> <span class="p">{</span>
+                <span class="n">slice</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="n">step</span><span class="p">..];</span>
+            <span class="p">}</span>
+            <span class="n">step</span> <span class="o">=</span> <span class="n">step</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="o">&amp;</span><span class="n">slice</span><span class="p">[</span><span class="mf">1.</span><span class="p">.]</span>   <span class="c1">// this shouldn&#39;t explode... right?</span>
+    <span class="p">}</span>
+    <span class="k">else</span> <span class="p">{</span> <span class="n">slice</span> <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>The <code>gallop</code> method can use any slice as input, and we give it a slice cut out of the graph’s edge list. If we mis-use the result slice there could be a risk of horrible aliasing, data races, de-, or re-allocation. Rust can confirm that none of this happens and just lets us use the same memory. It does this through <code>retain</code>’s closure, through a method I wrote (<code>gallop</code>), and through lots of weird logic. This is great!</p>
+
+<h3 id="building-the-triangles-query">Building the triangles query</h3>
+
+<p>So to recap, we have an implementation of <code>PrefixExtender&lt;P,E&gt;</code> whenever we have a combination of <code>GraphFragment&lt;E&gt;</code> and <code>L: Fn(&amp;P)-&gt;u64</code>. This second part, the function, is what tells us how to turn a prefix <code>P</code> into an integer we can use to look up extensions in the graph. We use the same graph data everywhere, but fake out multiple relations by letting the function from prefix to attribute vary.</p>
+
+<p>That being said, let’s count some triangles! We’ll do this in parts. I’m going to lie a bit again, and present some simplifications. Nothing horrible, just possibly mysterious things that would require a diversion to rationalize (and may just be bad design on my part).</p>
+
+<p>First we just write some code that from a <code>Communicator</code>, which indicates a worker’s index and its number of peers, figures out what fragment of the graph this worker will load up and be responsible for. The code then prepares a dataflow computation and an input into which we will feed <code>a: u32</code> values. This is all timely dataflow boiler-plate, and not super exciting from an algorithmic point of view.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">triangles</span><span class="o">&lt;</span><span class="n">C</span><span class="p">,</span> <span class="n">F</span><span class="o">&gt;</span><span class="p">(</span><span class="n">communicator</span><span class="o">:</span> <span class="n">C</span><span class="p">,</span> <span class="n">graph_soure</span><span class="o">:</span> <span class="n">F</span><span class="p">)</span>
+<span class="n">where</span> <span class="n">C</span><span class="o">:</span> <span class="n">Communicator</span><span class="p">,</span>
+      <span class="n">F</span><span class="o">:</span> <span class="n">Fn</span><span class="p">(</span><span class="kt">u64</span><span class="p">,</span><span class="kt">u64</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">GraphFragment</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span> <span class="p">{</span>
+
+    <span class="c1">// load up the slice of graph corresponding to our index out of peers.</span>
+    <span class="kd">let</span> <span class="n">graph</span> <span class="o">=</span> <span class="n">graph_source</span><span class="p">(</span><span class="n">communicator</span><span class="p">.</span><span class="n">index</span><span class="p">(),</span> <span class="n">communicator</span><span class="p">.</span><span class="n">peers</span><span class="p">());</span>
+    <span class="kd">let</span> <span class="n">graph</span> <span class="o">=</span> <span class="n">Rc</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="n">RefCell</span><span class="o">::</span><span class="n">new</span><span class="p">(</span><span class="n">graph</span><span class="p">));</span>
+
+    <span class="c1">// prepare a new computation with one input.</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">computation</span> <span class="o">=</span> <span class="n">new_computation</span><span class="p">(</span><span class="n">communicator</span><span class="p">);</span>
+    <span class="kd">let</span> <span class="p">(</span><span class="k">mut</span> <span class="n">input</span><span class="p">,</span> <span class="k">mut</span> <span class="n">stream</span><span class="p">)</span> <span class="o">=</span> <span class="n">computation</span><span class="p">.</span><span class="n">new_input</span><span class="p">();</span></code></pre></div>
+
+<p>The next step is to create the extender from <code>a</code> to <code>(a,b)</code>. We just need to pair a copy of <code>graph</code> with a function that converts from <code>a</code> into a graph node identifier, and it will propose the adjacent <code>b</code> values.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">//  // define an extender that uses &#39;a&#39; to suggest x: &#39;(a,x)&#39; extensions</span>
+    <span class="kd">let</span> <span class="n">ext_b</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="n">a</span><span class="o">|</span> <span class="p">{</span> <span class="n">a</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">}))];</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">pairs</span> <span class="o">=</span> <span class="kd">let</span> <span class="k">mut</span> <span class="n">triangles</span> <span class="o">=</span> <span class="n">stream</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">ext_b</span><span class="p">).</span><span class="n">flatten</span><span class="p">();</span></code></pre></div>
+
+<p>That <code>flatten()</code> method simply converts a <code>Stream&lt;G, (P, Vec&lt;E&gt;)&gt;</code> to a <code>Stream&lt;G, (P, E)&gt;</code>. It is just 17 lines of code somewhere, so hooray for timely dataflow being easy to use (succint, at least).</p>
+
+<p>The next step is to create the extenders from pairs <code>(a,b)</code> to triples <code>((a,b),c)</code>. There are going to be two extenders, as we want values <code>c</code> such that both <code>(a,c)</code> and <code>(b,c)</code> are present in the graph. Each extender needs to take an <code>(a,b)</code> and identify an edge source, and there only two choices.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">//  // define extenders using &#39;a&#39; and &#39;b&#39; to suggest x: (a,x) and x:(b,x)</span>
+    <span class="kd">let</span> <span class="n">ext_c</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">_</span><span class="p">)</span><span class="o">|</span> <span class="p">{</span> <span class="n">a</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">})),</span>
+                     <span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="p">(</span><span class="n">_</span><span class="p">,</span><span class="n">b</span><span class="p">)</span><span class="o">|</span> <span class="p">{</span> <span class="n">b</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">}))]</span>
+
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">triangles</span> <span class="o">=</span> <span class="n">pairs</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">ext_c</span><span class="p">).</span><span class="n">flatten</span><span class="p">();</span></code></pre></div>
+
+<p>Let’s also take a peek at what we see, printing out the triangles (<code>observe</code> is another 16 lines of code).</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">//  // take a peek at what gets produced.</span>
+    <span class="n">triangles</span><span class="p">.</span><span class="n">observe</span><span class="p">(</span><span class="o">|&amp;</span><span class="n">tri</span><span class="o">|</span> <span class="nb">println</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;triangle: {:?}&quot;</span><span class="p">,</span> <span class="n">tri</span><span class="p">));</span></code></pre></div>
+
+<p>Ok, we’ve got the data loaded up, the computation defined, and are ready to go. Let’s triangularate!</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">//  // finalize dataflow structure</span>
+    <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">get_internal_summary</span><span class="p">();</span>
+    <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">set_external_summary</span><span class="p">(</span><span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">(),</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Vec</span><span class="o">::</span><span class="n">new</span><span class="p">());</span>
+
+    <span class="c1">// introduce u32s to find triangles rooted from them</span>
+    <span class="k">for</span> <span class="n">node</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.</span><span class="n">fragment</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">())</span> <span class="p">{</span>
+        <span class="n">input</span><span class="p">.</span><span class="n">send_messages</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">node</span> <span class="k">as</span> <span class="kt">u32</span><span class="p">]);</span>
+        <span class="n">input</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="o">&amp;</span><span class="p">((),</span> <span class="n">node</span> <span class="k">as</span> <span class="kt">u64</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
+        <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">();</span>
+    <span class="p">}</span>
+
+    <span class="c1">// close input and finish any computation</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">close_at</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">fragment</span><span class="p">.</span><span class="n">borrow</span><span class="p">().</span><span class="n">nodes</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">));</span>
+    <span class="k">while</span> <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">()</span> <span class="p">{</span> <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This runs through each possible source <code>node</code> and produces all triangles starting from that vertex.</p>
+
+<h3 id="didnt-you-say-low-latency">Didn’t you say “low-latency”?</h3>
+
+<p>Good point. Although we went through all nodes in order, to enumerate all triangles, we didn’t have to. We could just as easily have written the main loop as:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">for</span> <span class="n">epoch</span> <span class="k">in</span> <span class="p">(</span><span class="mf">0.</span><span class="p">.)</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="n">node</span> <span class="o">=</span> <span class="n">read_u32_from_console</span><span class="p">();</span> <span class="c1">// not a real function!</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">send_messages</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">node</span> <span class="k">as</span> <span class="kt">u32</span><span class="p">]);</span>
+    <span class="n">input</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span><span class="p">),</span> <span class="o">&amp;</span><span class="p">((),</span> <span class="n">epoch</span> <span class="k">as</span> <span class="kt">u64</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
+    <span class="n">computation</span><span class="p">.</span><span class="mf">0.</span><span class="n">borrow_mut</span><span class="p">().</span><span class="n">step</span><span class="p">();</span>
+<span class="p">}</span></code></pre></div>
+
+<p>This reads input in from the user, fires that off to the dataflow, which prints out observed triangles asap. To give a sense for how promptly, let’s throw a timer in the standard loop up above, and start things up single-threaded on a fairly standard <a href="https://snap.stanford.edu/data/soc-LiveJournal1.html">LiveJournal dataset</a>:</p>
+
+<p><em>Caveat</em>: the code is barely tested and may be wrong; do not buy/sell anything based on these data.</p>
+
+<pre><code>enumerated triangles from (0..1) in 67947ns
+enumerated triangles from (1..2) in 42738ns
+enumerated triangles from (2..3) in 26064ns
+enumerated triangles from (3..4) in 48006ns
+enumerated triangles from (4..5) in 19921ns
+...
+</code></pre>
+
+<p>So the time between injecting a seed and getting all the triangles back out is some tens of microseconds.
+These numbers get a little better with batching, cutting out some of the overhead:</p>
+
+<pre><code>enumerated triangles from (0..10) in 231301ns
+enumerated triangles from (10..20) in 276721ns
+enumerated triangles from (20..30) in 149940ns
+enumerated triangles from (30..40) in 137285ns
+enumerated triangles from (40..50) in 155781ns
+...
+</code></pre>
+
+<p>And even better with even more batching, as it starts to look more like 10-15us amortized per vertex.</p>
+
+<pre><code>enumerated triangles from (0..1000) in 10129064ns
+enumerated triangles from (1000..2000) in 12018695ns
+enumerated triangles from (2000..3000) in 11323832ns
+enumerated triangles from (3000..4000) in 11224684ns
+enumerated triangles from (4000..5000) in 14810182ns
+...
+</code></pre>
+
+<p>This program is meant to stress several components and reveal what is slow and needs some work.
+The underlying system still has lots of room to improve (I think).The numbers <em>should</em> only get better.</p>
+
+<h3 id="triangles-are-soooo-lame">Triangles are <em>soooo</em> lame.</h3>
+
+<p>Triangles are <em>so</em> 2014! Everyone does triangles! Do something cooler!</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">// define extenders to add a &#39;d&#39; coordinate connected to each of a, b, c.</span>
+<span class="kd">let</span> <span class="n">ext_d</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="p">((</span><span class="n">a</span><span class="p">,</span><span class="n">_</span><span class="p">),</span><span class="n">_</span><span class="p">)</span><span class="o">|</span> <span class="p">{</span> <span class="n">a</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">})),</span>
+                 <span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="p">((</span><span class="n">_</span><span class="p">,</span><span class="n">b</span><span class="p">),</span><span class="n">_</span><span class="p">)</span><span class="o">|</span> <span class="p">{</span> <span class="n">b</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">})),</span>
+                 <span class="n">Box</span><span class="o">::</span><span class="n">new</span><span class="p">((</span><span class="n">graph</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span> <span class="o">|&amp;</span><span class="p">((</span><span class="n">_</span><span class="p">,</span><span class="n">_</span><span class="p">),</span><span class="n">c</span><span class="p">)</span><span class="o">|</span> <span class="p">{</span> <span class="n">c</span> <span class="k">as</span> <span class="kt">u64</span> <span class="p">}))];</span>
+
+<span class="kd">let</span> <span class="k">mut</span> <span class="n">quads</span> <span class="o">=</span> <span class="n">triangles</span><span class="p">.</span><span class="n">extend</span><span class="p">(</span><span class="n">ext_d</span><span class="p">).</span><span class="n">flatten</span><span class="p">();</span></code></pre></div>
+
+<p>In case you missed it, that was us defining a dataflow computation to enumerate 4-cliques.</p>
+
+<pre><code>enumerated 4-cliques from (0..1) in 164474ns
+enumerated 4-cliques from (1..2) in 230093ns
+enumerated 4-cliques from (2..3) in 40667ns
+enumerated 4-cliques from (3..4) in 154921ns
+enumerated 4-cliques from (4..5) in 67344ns
+...
+</code></pre>
+
+<p>Not impressed? How about:</p>
+
+<pre><code>enumerated 5-cliques from (0..1) in 115570ns
+enumerated 5-cliques from (1..2) in 311967ns
+enumerated 5-cliques from (2..3) in 110915ns
+enumerated 5-cliques from (3..4) in 126838ns
+enumerated 5-cliques from (4..5) in 104806ns
+</code></pre>
+
+<p>What about:</p>
+
+<pre><code>enumerated 6-cliques from (0..1) in 107292ns
+enumerated 6-cliques from (1..2) in 342537ns
+enumerated 6-cliques from (2..3) in 93778ns
+enumerated 6-cliques from (3..4) in 134948ns
+enumerated 6-cliques from (4..5) in 87148ns
+</code></pre>
+
+<p>I can keep going (seriously, I wrote a program to do it).</p>
+
+<p>Arbitrary graph motifs finding (small subgraphs you want to find in a large graph) is really easy to write. I’m sure there is lots of smarter research on how to do it will, but this is worst-case optimal, at least.</p>
+
+<h2 id="wrap-up">Wrap-up</h2>
+
+<p>There is some seriously cool work going on in join research. It isn’t nearly as stale as I thought is was.
+But, importantly, these new algorithms need better systems than your bog-standard batch processors.</p>
+
+<p>How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? I know <a href="https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join">Naiad can</a>, and <a href="https://flink.apache.org">other stream processors</a> should be able to. Being bad at things just isn’t cool.</p>
+
+<p>From my point of view, I now have a cool problem I can use to tune <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a>. I would expect it to start getting better and more usable (and I’ll probably actually try it in more configurations now too).</p>
+
+<h2 id="footnote-skew">Footnote: Skew</h2>
+
+<p>One of the theoretical concerns about this sort of approach is how well it distributes in the presence of skew. Each of our <code>count</code>, <code>propose</code>, and <code>intersect</code> operators is “data-parallel”, but is this actually helpful when the data are themselves not uniformly distributed among workers.</p>
+
+<p>The implementation I’ve talked about is not skew-resilient. If a vertex has a really high degree, all the edges may be placed on one machine. Adding more machines will not make <code>propose</code> go any faster, and will not prevent all proposals from being sent to this one machine for intersection.</p>
+
+<p>However, you can whip together a skew-resilient version of each of these operations.</p>
+
+<ol>
+  <li><code>count</code> is noturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.</li>
+  <li><code>propose</code> can be made skew resilient by distributing the extensions for each prefix to machines sequentially from a machine identified by a hash of the prefix. We need to know how many machines to ask for extensions, but each proposal should come with a count (I dropped it; oops).</li>
+  <li><code>intersect</code> can be made skew resilient by distributing the <code>(P, E)</code> records by hash, and shipping proposals to the known location for each relation.</li>
+</ol>
+
+<p>I’m not intimate enough with the work in the area to know for sure that this ticks all of the desired boxes. For example, one desideratum is that the computation take few “rounds”, in the MapReduce sense. Given that I don’t use MapReduce and still get computation done, this doesn’t really bother me.</p>
+
+<p>Flip comments aside, it would be good to understand if this approach does represent a scalable, skew-resilient worst-case optimal join algorithm. I’ve been told that this would be pretty cool.</p>
+
+<h2 id="credits-and-on-going-work">Credits and on-going work</h2>
+
+<p>This area (worst-case optimal join processing) is super cool, and I owe a debt to <a href="http://web.stanford.edu/~semih/">Semih Salihoghlu</a> and <a href="http://cs.stanford.edu/people/chrismre/">Chris Ré</a> for introducing the two of us. These folks and their colleagues are still very active, pushing the boundaries of what can be done to make join processing faster and faster.</p>
+
+<p><a href="http://arxiv.org/abs/1410.4156">Semih, Chris and others</a> have an approach to make even more complex joins efficient by using hypertree decompositions of queries. “Tree-like” acyclic queries have knowns ways to process them optimally (Viterbi-style). Once you get cycles they break, but if you can decompose the query into a tree of small cyclic queries and use the worst-case optimal techniques on the cyclic queries you get some nice results.</p>
+
+<p><a href="http://arxiv.org/abs/1503.02368">Chris Aberger, Chris and others</a> have a neat way to make the intersection testing much more efficient using SIMD instructions, and show that they can get orders-of-magnitude speed-ups by using these techniques. Various “unnamed” proprietary vendors seem to get well and thoroughly trounced.</p>
+
+<p>There is plenty of other work I’m not as familiar with (yet), but it seems to just keep coming. Be excited!</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+
+  </body>
+
+</html>
