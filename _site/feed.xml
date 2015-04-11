@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 11 Apr 2015 15:24:00 +0200</pubDate>
-    <lastBuildDate>Sat, 11 Apr 2015 15:24:00 +0200</lastBuildDate>
+    <pubDate>Sat, 11 Apr 2015 17:37:39 +0200</pubDate>
+    <lastBuildDate>Sat, 11 Apr 2015 17:37:39 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -50,7 +50,7 @@
 
 &lt;p&gt;The algorithm that Ngo et al detail is really quite general. They even call the algorithm GenericJoin.&lt;/p&gt;
 
-&lt;p&gt;I’m going to focus on a specific realization of it. I should say at this point that the specific realization is due to other people, not me. I’m not really sure who gets credit, but Semih Salihoghlu and Chris Ré are the ones that taught me about worst-case join processing, and it was with Semih, Chris, and Michael Isard that we banged out &lt;a href=&quot;https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join&quot;&gt;the first version of this in Naiad&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;I’m going to focus on a specific realization of it. I should say at this point that the specific realization is due to other people, not me. I’m not really sure who gets credit, but Semih Salihoglu and Chris Ré are the ones that taught me about worst-case join processing, and it was with Semih, Chris, and Michael Isard that we banged out &lt;a href=&quot;https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join&quot;&gt;the first version of this in Naiad&lt;/a&gt;.&lt;/p&gt;
 
 &lt;h3 id=&quot;specific-join&quot;&gt;Specific Join&lt;/h3&gt;
 
@@ -427,7 +427,7 @@ But, importantly, these new algorithms need better systems than your bog-standar
 
 &lt;h2 id=&quot;credits-and-on-going-work&quot;&gt;Credits and on-going work&lt;/h2&gt;
 
-&lt;p&gt;This area (worst-case optimal join processing) is super cool, and I owe a debt to &lt;a href=&quot;http://web.stanford.edu/~semih/&quot;&gt;Semih Salihoghlu&lt;/a&gt; and &lt;a href=&quot;http://cs.stanford.edu/people/chrismre/&quot;&gt;Chris Ré&lt;/a&gt; for introducing the two of us. These folks and their colleagues are still very active, pushing the boundaries of what can be done to make join processing faster and faster.&lt;/p&gt;
+&lt;p&gt;This area (worst-case optimal join processing) is super cool, and I owe a debt to &lt;a href=&quot;http://web.stanford.edu/~semih/&quot;&gt;Semih Salihoglu&lt;/a&gt; and &lt;a href=&quot;http://cs.stanford.edu/people/chrismre/&quot;&gt;Chris Ré&lt;/a&gt; for introducing the two of us. These folks and their colleagues are still very active, pushing the boundaries of what can be done to make join processing faster and faster.&lt;/p&gt;
 
 &lt;p&gt;&lt;a href=&quot;http://arxiv.org/abs/1410.4156&quot;&gt;Semih, Chris and others&lt;/a&gt; have an approach to make even more complex joins efficient by using hypertree decompositions of queries. “Tree-like” acyclic queries have knowns ways to process them optimally (Viterbi-style). Once you get cycles they break, but if you can decompose the query into a tree of small cyclic queries and use the worst-case optimal techniques on the cyclic queries you get some nice results.&lt;/p&gt;
 

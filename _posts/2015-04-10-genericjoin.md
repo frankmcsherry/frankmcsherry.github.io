@@ -2,7 +2,7 @@
 layout: post
 title:  "Worst-case optimal joins, in dataflow"
 date:   2015-04-11 15:20:00
-categories: dataflow relational join 
+categories: dataflow relational join
 published: true
 ---
 
@@ -40,7 +40,7 @@ You know who doesn't even have that excuse? The standard approaches to computing
 
 The algorithm that Ngo et al detail is really quite general. They even call the algorithm GenericJoin.
 
-I'm going to focus on a specific realization of it. I should say at this point that the specific realization is due to other people, not me. I'm not really sure who gets credit, but Semih Salihoghlu and Chris Ré are the ones that taught me about worst-case join processing, and it was with Semih, Chris, and Michael Isard that we banged out [the first version of this in Naiad](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join).
+I'm going to focus on a specific realization of it. I should say at this point that the specific realization is due to other people, not me. I'm not really sure who gets credit, but Semih Salihoglu and Chris Ré are the ones that taught me about worst-case join processing, and it was with Semih, Chris, and Michael Isard that we banged out [the first version of this in Naiad](https://github.com/MicrosoftResearch/NaiadSamples/tree/master/Join).
 
 ### Specific Join
 
@@ -443,7 +443,7 @@ Flip comments aside, it would be good to understand if this approach does repres
 
 ## Credits and on-going work
 
-This area (worst-case optimal join processing) is super cool, and I owe a debt to [Semih Salihoghlu](http://web.stanford.edu/~semih/) and [Chris Ré](http://cs.stanford.edu/people/chrismre/) for introducing the two of us. These folks and their colleagues are still very active, pushing the boundaries of what can be done to make join processing faster and faster.
+This area (worst-case optimal join processing) is super cool, and I owe a debt to [Semih Salihoglu](http://web.stanford.edu/~semih/) and [Chris Ré](http://cs.stanford.edu/people/chrismre/) for introducing the two of us. These folks and their colleagues are still very active, pushing the boundaries of what can be done to make join processing faster and faster.
 
 [Semih, Chris and others](http://arxiv.org/abs/1410.4156) have an approach to make even more complex joins efficient by using hypertree decompositions of queries. "Tree-like" acyclic queries have knowns ways to process them optimally (Viterbi-style). Once you get cycles they break, but if you can decompose the query into a tree of small cyclic queries and use the worst-case optimal techniques on the cyclic queries you get some nice results.
 
