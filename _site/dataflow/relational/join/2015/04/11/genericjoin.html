@@ -76,28 +76,47 @@
 
 <p>The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.</p>
 
+<h3 id="an-example">An example</h3>
+
+<p>Consider the first records of the three relations <script type="math/tex">R_1, R_2, R_3</script>, over the three attributes <script type="math/tex">A_1, A_2, A_3</script>:</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/join.png" alt="My helpful screenshot" /></p>
+
+<p>The relational join between the three relations must contains at least the triples <script type="math/tex">(1, x, 2)</script> and <script type="math/tex">(5, x, 4)</script>, because we can see in the first relation the pairs <script type="math/tex">(1,x)</script> and <script type="math/tex">(5,x)</script>, in the second relation the pairs <script type="math/tex">(x,2)</script> and <script type="math/tex">(x,4)</script>, and in the third relation the pairs <script type="math/tex">(1,2)</script> and <script type="math/tex">(5,4)</script>.</p>
+
+<p>Of course, there may be more records in the full join as we see more of the records from each relation.</p>
+
 <h3 id="ye-olde-methodologees">Ye Olde Methodologees</h3>
 
 <p>There are many ways to go about doing a binary join, between two relations, but the simplest is a hash-join, where you look at the attributes in common between the two relations and hash each tuple based on their restriction to those attributes. For each pair of matching tuples (one from each relation), you form the extended tuple that takes the union of the attributes of the relations.</p>
 
-<p>To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a “plan”, which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together. Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.</p>
+<p>In the example above, we might join the first two relations, by hashing records using the attribute <script type="math/tex">A_2</script>. This matches <script type="math/tex">(1,x)</script> and  <script type="math/tex">(5,x)</script> from the first relation with  <script type="math/tex">(x,2)</script> and  <script type="math/tex">(x,4)</script> from the second relation.
+The output data in this case are the four triples:  <script type="math/tex">(1,x,2)</script>,  <script type="math/tex">(1,x,4)</script>,  <script type="math/tex">(5,x,2)</script>, and <script type="math/tex">(5,x,4)</script>.
+The record <script type="math/tex">(1,q)</script> matches nothing in the second relation, and results in no output.</p>
+
+<p>To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a “plan”, which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together.</p>
+
+<p>In the example above, we might prefer to join the three relations by first joining <script type="math/tex">R_2</script> and <script type="math/tex">R_3</script>, which would produce only two records before joining with <script type="math/tex">R_1</script>.
+Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.</p>
 
 <h3 id="more-recent-work">More recent work</h3>
 
 <p>Relational joins have been around for such a long while, you might be a bit surprised to learn that there is still new work going on here. You might be even more surprised to learn that, in some respects, folks have been doing it wrong for quite some time. This is exactly what <a href="http://arxiv.org/abs/1310.3314">Ngo et al</a> observe, in awesome work:</p>
 
-<ul>
+<ol>
   <li>
-    <p>The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.</p>
+    <p>The standard approach to computing relational joins, in which one repeatedly does binary joins, can do asymptotically more work than the join could ever possibly produce output tuples.</p>
+
+    <p>In the three-way join example, if each relation has size <script type="math/tex">m</script>, there can be at most <script type="math/tex">m^{3/2}</script> output tuples, because <em>math</em>. However, inputs exist so that any plan based on binary joins will do do <script type="math/tex">m^2</script> work.</p>
   </li>
   <li>
-    <p>There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.</p>
+    <p>There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples. For a three-way join, they will do <script type="math/tex">O(m^{3/2})</script> computation.</p>
   </li>
-</ul>
+</ol>
 
-<p>This second point doesn’t mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at lesat have the excuse that they <em>might</em> have had to do it.</p>
+<p>This second point doesn’t mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at least have the excuse that they <em>might</em> have had to do it.</p>
 
-<p>You know who doesn’t even have that excuse? The standard approaches to computing relational joins</p>
+<p>You know who doesn’t even have that excuse? The standard approaches to computing relational joins.</p>
 
 <h2 id="generic-join">Generic Join</h2>
 

@@ -18,23 +18,43 @@ A relational join is a pretty well studied thing, and I'm just going to lay some
 
 The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.
 
+### An example
+
+Consider the first records of the three relations $$R_1, R_2, R_3$$, over the three attributes $$A_1, A_2, A_3$$:
+
+![My helpful screenshot]({{ site.url }}/assets/join.png)
+
+The relational join between the three relations must contains at least the triples $$ (1, x, 2)$$ and $$(5, x, 4)$$, because we can see in the first relation the pairs $$(1,x)$$ and $$(5,x)$$, in the second relation the pairs $$(x,2)$$ and $$(x,4)$$, and in the third relation the pairs $$(1,2)$$ and $$(5,4)$$.
+
+Of course, there may be more records in the full join as we see more of the records from each relation.
+
 ### Ye Olde Methodologees
 
 There are many ways to go about doing a binary join, between two relations, but the simplest is a hash-join, where you look at the attributes in common between the two relations and hash each tuple based on their restriction to those attributes. For each pair of matching tuples (one from each relation), you form the extended tuple that takes the union of the attributes of the relations.
 
-To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a "plan", which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together. Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.
+In the example above, we might join the first two relations, by hashing records using the attribute $$A_2$$. This matches $$(1,x)$$ and  $$(5,x)$$ from the first relation with  $$(x,2)$$ and  $$(x,4)$$ from the second relation.
+The output data in this case are the four triples:  $$(1,x,2)$$,  $$(1,x,4)$$,  $$(5,x,2)$$, and $$(5,x,4)$$.
+The record $$(1,q)$$ matches nothing in the second relation, and results in no output.
+
+
+To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a "plan", which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together.
+
+In the example above, we might prefer to join the three relations by first joining $$R_2$$ and $$R_3$$, which would produce only two records before joining with $$R_1$$.
+Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.
 
 ### More recent work
 
 Relational joins have been around for such a long while, you might be a bit surprised to learn that there is still new work going on here. You might be even more surprised to learn that, in some respects, folks have been doing it wrong for quite some time. This is exactly what [Ngo et al](http://arxiv.org/abs/1310.3314) observe, in awesome work:
 
-* The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.
+1. The standard approach to computing relational joins, in which one repeatedly does binary joins, can do asymptotically more work than the join could ever possibly produce output tuples.
 
-* There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.
+    In the three-way join example, if each relation has size $$m$$, there can be at most $$m^{3/2}$$ output tuples, because *math*. However, inputs exist so that any plan based on binary joins will do do $$m^2$$ work.
 
-This second point doesn't mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at lesat have the excuse that they *might* have had to do it.
+2. There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples. For a three-way join, they will do $$O(m^{3/2})$$ computation.
 
-You know who doesn't even have that excuse? The standard approaches to computing relational joins
+This second point doesn't mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at least have the excuse that they *might* have had to do it.
+
+You know who doesn't even have that excuse? The standard approaches to computing relational joins.
 
 ## Generic Join
 

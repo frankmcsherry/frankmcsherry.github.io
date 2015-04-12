@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 11 Apr 2015 21:38:46 +0200</pubDate>
-    <lastBuildDate>Sat, 11 Apr 2015 21:38:46 +0200</lastBuildDate>
+    <pubDate>Sun, 12 Apr 2015 11:03:03 +0200</pubDate>
+    <lastBuildDate>Sun, 12 Apr 2015 11:03:03 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -23,28 +23,47 @@
 
 &lt;p&gt;The relational join problem is, given several relations, determine the set of tuples over the full attribute space so that for each tuple, its projection onto the attributes of each relation exists in that relation.&lt;/p&gt;
 
+&lt;h3 id=&quot;an-example&quot;&gt;An example&lt;/h3&gt;
+
+&lt;p&gt;Consider the first records of the three relations &lt;script type=&quot;math/tex&quot;&gt;R_1, R_2, R_3&lt;/script&gt;, over the three attributes &lt;script type=&quot;math/tex&quot;&gt;A_1, A_2, A_3&lt;/script&gt;:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://www.frankmcsherry.org/assets/join.png&quot; alt=&quot;My helpful screenshot&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The relational join between the three relations must contains at least the triples &lt;script type=&quot;math/tex&quot;&gt;(1, x, 2)&lt;/script&gt; and &lt;script type=&quot;math/tex&quot;&gt;(5, x, 4)&lt;/script&gt;, because we can see in the first relation the pairs &lt;script type=&quot;math/tex&quot;&gt;(1,x)&lt;/script&gt; and &lt;script type=&quot;math/tex&quot;&gt;(5,x)&lt;/script&gt;, in the second relation the pairs &lt;script type=&quot;math/tex&quot;&gt;(x,2)&lt;/script&gt; and &lt;script type=&quot;math/tex&quot;&gt;(x,4)&lt;/script&gt;, and in the third relation the pairs &lt;script type=&quot;math/tex&quot;&gt;(1,2)&lt;/script&gt; and &lt;script type=&quot;math/tex&quot;&gt;(5,4)&lt;/script&gt;.&lt;/p&gt;
+
+&lt;p&gt;Of course, there may be more records in the full join as we see more of the records from each relation.&lt;/p&gt;
+
 &lt;h3 id=&quot;ye-olde-methodologees&quot;&gt;Ye Olde Methodologees&lt;/h3&gt;
 
 &lt;p&gt;There are many ways to go about doing a binary join, between two relations, but the simplest is a hash-join, where you look at the attributes in common between the two relations and hash each tuple based on their restriction to those attributes. For each pair of matching tuples (one from each relation), you form the extended tuple that takes the union of the attributes of the relations.&lt;/p&gt;
 
-&lt;p&gt;To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a “plan”, which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together. Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.&lt;/p&gt;
+&lt;p&gt;In the example above, we might join the first two relations, by hashing records using the attribute &lt;script type=&quot;math/tex&quot;&gt;A_2&lt;/script&gt;. This matches &lt;script type=&quot;math/tex&quot;&gt;(1,x)&lt;/script&gt; and  &lt;script type=&quot;math/tex&quot;&gt;(5,x)&lt;/script&gt; from the first relation with  &lt;script type=&quot;math/tex&quot;&gt;(x,2)&lt;/script&gt; and  &lt;script type=&quot;math/tex&quot;&gt;(x,4)&lt;/script&gt; from the second relation.
+The output data in this case are the four triples:  &lt;script type=&quot;math/tex&quot;&gt;(1,x,2)&lt;/script&gt;,  &lt;script type=&quot;math/tex&quot;&gt;(1,x,4)&lt;/script&gt;,  &lt;script type=&quot;math/tex&quot;&gt;(5,x,2)&lt;/script&gt;, and &lt;script type=&quot;math/tex&quot;&gt;(5,x,4)&lt;/script&gt;.
+The record &lt;script type=&quot;math/tex&quot;&gt;(1,q)&lt;/script&gt; matches nothing in the second relation, and results in no output.&lt;/p&gt;
+
+&lt;p&gt;To do a multi-way join, one could just keep grabbing relations and joining them in, until all relations have been used. This gives the correct answer, but can be really slow. A smarter way is to form a “plan”, which is a binary tree in which the leaves are relations and the internal nodes correspond to joins of relations. The root of this tree is the join of all relations, but the tree structure suggests which relations are good to start joining together.&lt;/p&gt;
+
+&lt;p&gt;In the example above, we might prefer to join the three relations by first joining &lt;script type=&quot;math/tex&quot;&gt;R_2&lt;/script&gt; and &lt;script type=&quot;math/tex&quot;&gt;R_3&lt;/script&gt;, which would produce only two records before joining with &lt;script type=&quot;math/tex&quot;&gt;R_1&lt;/script&gt;.
+Building a smart join plan is something that database researchers like to talk about at their fancy meetings, and is a good way to strike up a conversation.&lt;/p&gt;
 
 &lt;h3 id=&quot;more-recent-work&quot;&gt;More recent work&lt;/h3&gt;
 
 &lt;p&gt;Relational joins have been around for such a long while, you might be a bit surprised to learn that there is still new work going on here. You might be even more surprised to learn that, in some respects, folks have been doing it wrong for quite some time. This is exactly what &lt;a href=&quot;http://arxiv.org/abs/1310.3314&quot;&gt;Ngo et al&lt;/a&gt; observe, in awesome work:&lt;/p&gt;
 
-&lt;ul&gt;
+&lt;ol&gt;
   &lt;li&gt;
-    &lt;p&gt;The standard approach to computing relational joins, in which you repeatedly do binary joins, can do asymptotically more computation than the join could ever possibly produce as output tuples.&lt;/p&gt;
+    &lt;p&gt;The standard approach to computing relational joins, in which one repeatedly does binary joins, can do asymptotically more work than the join could ever possibly produce output tuples.&lt;/p&gt;
+
+    &lt;p&gt;In the three-way join example, if each relation has size &lt;script type=&quot;math/tex&quot;&gt;m&lt;/script&gt;, there can be at most &lt;script type=&quot;math/tex&quot;&gt;m^{3/2}&lt;/script&gt; output tuples, because &lt;em&gt;math&lt;/em&gt;. However, inputs exist so that any plan based on binary joins will do do &lt;script type=&quot;math/tex&quot;&gt;m^2&lt;/script&gt; work.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples.&lt;/p&gt;
+    &lt;p&gt;There exist algorithms that never do more work (asymptotically) than the join could, for some input of the same size, produce output tuples. For a three-way join, they will do &lt;script type=&quot;math/tex&quot;&gt;O(m^{3/2})&lt;/script&gt; computation.&lt;/p&gt;
   &lt;/li&gt;
-&lt;/ul&gt;
+&lt;/ol&gt;
 
-&lt;p&gt;This second point doesn’t mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at lesat have the excuse that they &lt;em&gt;might&lt;/em&gt; have had to do it.&lt;/p&gt;
+&lt;p&gt;This second point doesn’t mean that they will only do as much work as they will produce output tuples, only that when they do lots of work they at least have the excuse that they &lt;em&gt;might&lt;/em&gt; have had to do it.&lt;/p&gt;
 
-&lt;p&gt;You know who doesn’t even have that excuse? The standard approaches to computing relational joins&lt;/p&gt;
+&lt;p&gt;You know who doesn’t even have that excuse? The standard approaches to computing relational joins.&lt;/p&gt;
 
 &lt;h2 id=&quot;generic-join&quot;&gt;Generic Join&lt;/h2&gt;
 
