@@ -385,7 +385,7 @@ This reads input in from the user, fires that off to the dataflow, which prints 
     enumerated triangles from (4..5) in 19921ns
     ...
 
-So the time between injecting a seed and getting all the triangles back out is some tens of microseconds.
+So the time between injecting a node identifier and getting all the triangles back out is some tens of microseconds.
 These numbers get a little better with batching, cutting out some of the overhead:
 
     enumerated triangles from (0..10) in 231301ns
