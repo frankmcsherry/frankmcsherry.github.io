@@ -127,7 +127,7 @@ pub trait StreamPrefixExtender<G: Graph, P, E> {
 }
 {% endhighlight %}
 
-The records carry more information around with them; information that used to be on the stack now needs to be put in the records themselves. For example, we indicate the relation with the least count by a triple `(prefix: P, count: u64, index: u64)`, data that would otherwise be in local variables. The signature of `count` is also changed to takes and produces triples, like updating stack variables.
+The records carry more information around with them; information that used to be on the stack now needs to be put in the records themselves. For example, we indicate the relation with the least count by a triple `(prefix: P, count: u64, index: u64)`, data that would otherwise be in local variables. The signature of `count` is also changed to take and produces triples, like updating stack variables.
 
 
 Although we are going to *use* this interface, you don't need to know too much about about this. The main thing to know is that there are about fifty fairly predictable lines of code that go and implement a `StreamPrefixExtender<G, P, E>` for any type implementing `PrefixExtender<P, E>`.
