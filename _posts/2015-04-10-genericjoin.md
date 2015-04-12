@@ -120,7 +120,7 @@ We need to lift the implementation of a `PrefixExtender<P, E>` to work on stream
 Fortunately, I'm going to do this for us, by implementing the following trait for any type implementing `PrefixExtender<P, E>` (plus some information about how to distribute the prefixes among workers).
 
 {% highlight rust %}
-pub trait StreamPrefixExtender<G: Graph, P, E> {
+pub trait StreamPrefixExtender<G, P, E> {
     fn count(&self, &mut Stream<G, (P, u64, u64)>, u64) -> Stream<G, (P, u64, u64)>;
     fn propose(&self, &mut Stream<G, P>) -> Stream<G, (P, Vec<E>)>;
     fn intersect(&self, &mut Stream<G, (P, Vec<E>)>) -> Stream<G, (P, Vec<E>)>;
@@ -157,7 +157,7 @@ We need to write a method for `Stream<G, P>` that, given a vector of arbitrary t
 I'm just going to show you the code, but the comments should talk you through it. It's just like we said.
 
 {% highlight rust %}
-impl<G: Graph, P, E> SpecificJoinExt<G, P, E> for Stream<G, P> {
+impl<G, P, E> SpecificJoinExt<G, P, E> for Stream<G, P> {
     fn extend(&mut self, extenders: Vec<Box<StreamPrefixExtender<G, P, E>>>)
             -> Stream<G, (P, Vec<E>)> {
 
