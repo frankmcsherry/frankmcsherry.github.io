@@ -109,7 +109,15 @@ pub trait PrefixExtender<Prefix, Extension> {
 
 I think this is as promised. This is what a relation needs to implement for us to be able to extend an element of type `Prefix` (think tuples $$(a_1, \ldots a_i)$$) with an element of type `Extension` (think $$a_{i+1}$$).
 
-To actually make computation happen, I'm going to introduce a interface that is bit more complicated, where the data are not individual records, but rather streams of records (in the timely dataflow sense). The records will carry some more information around with them to work in dataflow; for example we use triples `(prefix: P, count: u64, index: u64)` to indicate the least count and relation for a prefix.
+### Distributed implementation
+
+Of course, what we would really like is to extend each of the prefixes in parallel across many workers.
+At least, that is what I want. If you couldn't care less, you should totally just skim this part.
+
+To make this happen I'm going to use the [timely dataflow libary](https://github.com/frankmcsherry/timely-dataflow), which uses a `Stream<G, Prefix>` type to represent a distributed stream of records of type `Prefix`. The `G` type parameter describes how the stream is distributed and how the computation will execute, and we'll just ignore it for now.
+
+We need to lift the implementation of a `PrefixExtender<P, E>` to work on streams `Stream<G, P>`.
+Fortunately, I'm going to do this for us, by implementing the following trait for any type implementing `PrefixExtender<P, E>` (plus some information about how to distribute the prefixes among workers).
 
 {% highlight rust %}
 pub trait StreamPrefixExtender<G: Graph, P, E> {
@@ -119,14 +127,19 @@ pub trait StreamPrefixExtender<G: Graph, P, E> {
 }
 {% endhighlight %}
 
+The records carry more information around with them; information that used to be on the stack now needs to be put in the records themselves. For example, we indicate the relation with the least count by a triple `(prefix: P, count: u64, index: u64)`, data that would otherwise be in local variables. The signature of `count` is also changed to takes and produces triples, like updating stack variables.
+
+
 Although we are going to *use* this interface, you don't need to know too much about about this. The main thing to know is that there are about fifty fairly predictable lines of code that go and implement a `StreamPrefixExtender<G, P, E>` for any type implementing `PrefixExtender<P, E>`.
 
 {% highlight rust %}
 impl<G, P, E, PE> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>>
 where PE: PrefixExtender<P, E> {
-    // implement methods up there, using logic from PrefixExtender PE
+    // the library does this for you, you just implement PrefixExtender.
 }
 {% endhighlight %}
+
+Technically speaking, you will also need to tell timely dataflow how to distribute the prefixes. This will depend on how you distribute your relation, and is something I'll say more about in an upcoming post.
 
 ### Specific Join in Rust
 

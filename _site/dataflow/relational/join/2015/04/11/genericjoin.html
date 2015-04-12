@@ -171,7 +171,15 @@ For each <script type="math/tex">(a_1, \ldots a_i)</script> we want to produce t
 
 <p>I think this is as promised. This is what a relation needs to implement for us to be able to extend an element of type <code>Prefix</code> (think tuples <script type="math/tex">(a_1, \ldots a_i)</script>) with an element of type <code>Extension</code> (think <script type="math/tex">a_{i+1}</script>).</p>
 
-<p>To actually make computation happen, I’m going to introduce a interface that is bit more complicated, where the data are not individual records, but rather streams of records (in the timely dataflow sense). The records will carry some more information around with them to work in dataflow; for example we use triples <code>(prefix: P, count: u64, index: u64)</code> to indicate the least count and relation for a prefix.</p>
+<h3 id="distributed-implementation">Distributed implementation</h3>
+
+<p>Of course, what we would really like is to extend each of the prefixes in parallel across many workers.
+At least, that is what I want. If you couldn’t care less, you should totally just skim this part.</p>
+
+<p>To make this happen I’m going to use the <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow libary</a>, which uses a <code>Stream&lt;G, Prefix&gt;</code> type to represent a distributed stream of records of type <code>Prefix</code>. The <code>G</code> type parameter describes how the stream is distributed and how the computation will execute, and we’ll just ignore it for now.</p>
+
+<p>We need to lift the implementation of a <code>PrefixExtender&lt;P, E&gt;</code> to work on streams <code>Stream&lt;G, P&gt;</code>.
+Fortunately, I’m going to do this for us, by implementing the following trait for any type implementing <code>PrefixExtender&lt;P, E&gt;</code> (plus some information about how to distribute the prefixes among workers).</p>
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">pub</span> <span class="k">trait</span> <span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="o">:</span> <span class="n">Graph</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
     <span class="k">fn</span> <span class="n">count</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="kt">u64</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="kt">u64</span><span class="p">,</span> <span class="kt">u64</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
@@ -179,12 +187,16 @@ For each <script type="math/tex">(a_1, \ldots a_i)</script> we want to produce t
     <span class="k">fn</span> <span class="n">intersect</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">Vec</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
 <span class="p">}</span></code></pre></div>
 
+<p>The records carry more information around with them; information that used to be on the stack now needs to be put in the records themselves. For example, we indicate the relation with the least count by a triple <code>(prefix: P, count: u64, index: u64)</code>, data that would otherwise be in local variables. The signature of <code>count</code> is also changed to takes and produces triples, like updating stack variables.</p>
+
 <p>Although we are going to <em>use</em> this interface, you don’t need to know too much about about this. The main thing to know is that there are about fifty fairly predictable lines of code that go and implement a <code>StreamPrefixExtender&lt;G, P, E&gt;</code> for any type implementing <code>PrefixExtender&lt;P, E&gt;</code>.</p>
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">impl</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="p">,</span> <span class="n">PE</span><span class="o">&gt;</span> <span class="n">StreamPrefixExtender</span><span class="o">&lt;</span><span class="n">G</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="k">for</span> <span class="n">Rc</span><span class="o">&lt;</span><span class="n">RefCell</span><span class="o">&lt;</span><span class="n">PE</span><span class="o">&gt;&gt;</span>
 <span class="n">where</span> <span class="n">PE</span><span class="o">:</span> <span class="n">PrefixExtender</span><span class="o">&lt;</span><span class="n">P</span><span class="p">,</span> <span class="n">E</span><span class="o">&gt;</span> <span class="p">{</span>
-    <span class="c1">// implement methods up there, using logic from PrefixExtender PE</span>
+    <span class="c1">// the library does this for you, you just implement PrefixExtender.</span>
 <span class="p">}</span></code></pre></div>
+
+<p>Technically speaking, you will also need to tell timely dataflow how to distribute the prefixes. This will depend on how you distribute your relation, and is something I’ll say more about in an upcoming post.</p>
 
 <h3 id="specific-join-in-rust">Specific Join in Rust</h3>
 
