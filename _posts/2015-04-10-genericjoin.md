@@ -436,6 +436,7 @@ Not impressed? How about:
     enumerated 5-cliques from (2..3) in 110915ns
     enumerated 5-cliques from (3..4) in 126838ns
     enumerated 5-cliques from (4..5) in 104806ns
+    ...
 
 What about:
 
@@ -444,6 +445,7 @@ What about:
     enumerated 6-cliques from (2..3) in 93778ns
     enumerated 6-cliques from (3..4) in 134948ns
     enumerated 6-cliques from (4..5) in 87148ns
+    ...
 
 I can keep going (seriously, I wrote a program to do it).
 
@@ -468,7 +470,7 @@ The implementation I've talked about is not skew-resilient. If a vertex has a re
 
 However, you can whip together a skew-resilient version of each of these operations.
 
-1. `count` is noturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.
+1. `count` is naturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.
 2. `propose` can be made skew resilient by distributing the extensions for each prefix to machines sequentially from a machine identified by a hash of the prefix. We need to know how many machines to ask for extensions, but each proposal should come with a count (I dropped it; oops).
 3. `intersect` can be made skew resilient by distributing the `(P, E)` records by hash, and shipping proposals to the known location for each relation.
 

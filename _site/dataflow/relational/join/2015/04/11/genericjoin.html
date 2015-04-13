@@ -467,6 +467,7 @@ enumerated 5-cliques from (1..2) in 311967ns
 enumerated 5-cliques from (2..3) in 110915ns
 enumerated 5-cliques from (3..4) in 126838ns
 enumerated 5-cliques from (4..5) in 104806ns
+...
 </code></pre>
 
 <p>What about:</p>
@@ -476,6 +477,7 @@ enumerated 6-cliques from (1..2) in 342537ns
 enumerated 6-cliques from (2..3) in 93778ns
 enumerated 6-cliques from (3..4) in 134948ns
 enumerated 6-cliques from (4..5) in 87148ns
+...
 </code></pre>
 
 <p>I can keep going (seriously, I wrote a program to do it).</p>
@@ -502,7 +504,7 @@ But, importantly, these new algorithms need better systems than your bog-standar
 <p>However, you can whip together a skew-resilient version of each of these operations.</p>
 
 <ol>
-  <li><code>count</code> is noturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.</li>
+  <li><code>count</code> is naturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.</li>
   <li><code>propose</code> can be made skew resilient by distributing the extensions for each prefix to machines sequentially from a machine identified by a hash of the prefix. We need to know how many machines to ask for extensions, but each proposal should come with a count (I dropped it; oops).</li>
   <li><code>intersect</code> can be made skew resilient by distributing the <code>(P, E)</code> records by hash, and shipping proposals to the known location for each relation.</li>
 </ol>

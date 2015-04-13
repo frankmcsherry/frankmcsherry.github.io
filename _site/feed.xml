@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 12 Apr 2015 15:11:05 +0200</pubDate>
-    <lastBuildDate>Sun, 12 Apr 2015 15:11:05 +0200</lastBuildDate>
+    <pubDate>Mon, 13 Apr 2015 18:14:50 +0200</pubDate>
+    <lastBuildDate>Mon, 13 Apr 2015 18:14:50 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -414,6 +414,7 @@ enumerated 5-cliques from (1..2) in 311967ns
 enumerated 5-cliques from (2..3) in 110915ns
 enumerated 5-cliques from (3..4) in 126838ns
 enumerated 5-cliques from (4..5) in 104806ns
+...
 &lt;/code&gt;&lt;/pre&gt;
 
 &lt;p&gt;What about:&lt;/p&gt;
@@ -423,6 +424,7 @@ enumerated 6-cliques from (1..2) in 342537ns
 enumerated 6-cliques from (2..3) in 93778ns
 enumerated 6-cliques from (3..4) in 134948ns
 enumerated 6-cliques from (4..5) in 87148ns
+...
 &lt;/code&gt;&lt;/pre&gt;
 
 &lt;p&gt;I can keep going (seriously, I wrote a program to do it).&lt;/p&gt;
@@ -449,7 +451,7 @@ But, importantly, these new algorithms need better systems than your bog-standar
 &lt;p&gt;However, you can whip together a skew-resilient version of each of these operations.&lt;/p&gt;
 
 &lt;ol&gt;
-  &lt;li&gt;&lt;code&gt;count&lt;/code&gt; is noturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.&lt;/li&gt;
+  &lt;li&gt;&lt;code&gt;count&lt;/code&gt; is naturally skew resilient because we just need a number for each prefix. They can be distributed (uniformly) by a hash on the prefix.&lt;/li&gt;
   &lt;li&gt;&lt;code&gt;propose&lt;/code&gt; can be made skew resilient by distributing the extensions for each prefix to machines sequentially from a machine identified by a hash of the prefix. We need to know how many machines to ask for extensions, but each proposal should come with a count (I dropped it; oops).&lt;/li&gt;
   &lt;li&gt;&lt;code&gt;intersect&lt;/code&gt; can be made skew resilient by distributing the &lt;code&gt;(P, E)&lt;/code&gt; records by hash, and shipping proposals to the known location for each relation.&lt;/li&gt;
 &lt;/ol&gt;
