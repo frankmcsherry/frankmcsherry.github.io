@@ -453,7 +453,7 @@ Arbitrary graph motif finding (small subgraphs you want to find in a large graph
 
 ## Wrap-up
 
-There is some seriously cool work going on in join research. It isn't nearly as stale as I thought is was.
+There is some seriously cool work going on in join research. It isn't nearly as stale as I thought it was.
 But, importantly, these new algorithms need better systems than your bog-standard batch processors.
 
 How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? Being bad at things stopped being cool in high school...
