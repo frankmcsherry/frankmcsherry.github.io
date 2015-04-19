@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 19 Apr 2015 18:38:45 +0200</pubDate>
-    <lastBuildDate>Sun, 19 Apr 2015 18:38:45 +0200</lastBuildDate>
+    <pubDate>Sun, 19 Apr 2015 18:42:11 +0200</pubDate>
+    <lastBuildDate>Sun, 19 Apr 2015 18:42:11 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -220,7 +220,7 @@ This is that advanced and interesting implementor of &lt;code&gt;GraphBuilder&lt
 &lt;p&gt;The final bit of code looks like this:&lt;/p&gt;
 
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;root&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;step&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;c1&quot;&gt;// introdue input&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// introduce input&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 
 &lt;p&gt;That looks pretty simple and harmless, but it is what sets the whole dataflow computation into motion.&lt;/p&gt;
@@ -670,7 +670,7 @@ enumerated 6-cliques from (4..5) in 87148ns
 
 &lt;h2 id=&quot;wrap-up&quot;&gt;Wrap-up&lt;/h2&gt;
 
-&lt;p&gt;There is some seriously cool work going on in join research. It isn’t nearly as stale as I thought is was.
+&lt;p&gt;There is some seriously cool work going on in join research. It isn’t nearly as stale as I thought it was.
 But, importantly, these new algorithms need better systems than your bog-standard batch processors.&lt;/p&gt;
 
 &lt;p&gt;How many of your favorite graph processors are able to start handing back 6-cliques in less than a millisecond, with a memory footprint that is roughly just the graph itself? Not the one you use? Why not? Being bad at things stopped being cool in high school…&lt;/p&gt;

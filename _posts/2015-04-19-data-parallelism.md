@@ -230,7 +230,7 @@ The final bit of code looks like this:
 
 {% highlight rust %}
 while root.step() {
-    // introdue input
+    // introduce input
 }
 {% endhighlight %}
 
