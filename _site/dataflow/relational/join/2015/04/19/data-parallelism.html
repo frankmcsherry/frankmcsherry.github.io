@@ -9,7 +9,7 @@
   <meta name="viewport" content="width=device-width initial-scale=1">
 
   <title>Data-parallelism in timely dataflow</title>
-  <meta name="description" content="The previous post described a neat algorithm of Ngo et al and then described how one could implement this in timely dataflow. There were several bits of Rust...">
+  <meta name="description" content="The previous post described a neat algorithm of Ngo et al and then described how one could go and implement this in timely dataflow. There were several bits ...">
 
   <link rel="stylesheet" href="/css/main.css">
   <link rel="canonical" href="http://www.frankmcsherry.org/dataflow/relational/join/2015/04/19/data-parallelism.html">
@@ -64,7 +64,9 @@
   </header>
 
   <article class="post-content">
-    <p>The <a href="http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html">previous post</a> described a neat algorithm of <a href="http://arxiv.org/abs/1310.3314">Ngo et al</a> and then described how one could implement this in timely dataflow. There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm. In this post, we are going to walk through how the data-parallel part actually happens, and detail some of the moving parts.</p>
+    <p>The <a href="http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html">previous post</a> described a neat algorithm of <a href="http://arxiv.org/abs/1310.3314">Ngo et al</a> and then described how one could go and implement this in <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a>. There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm.</p>
+
+<p>In this post we walk through how the data-parallel bit happens, and detail some of the moving parts.</p>
 
 <p>Let’s start at the top, with some code we didn’t see in the previous post: a <code>main</code> method:</p>
 

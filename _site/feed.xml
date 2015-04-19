@@ -5,13 +5,15 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 19 Apr 2015 18:42:11 +0200</pubDate>
-    <lastBuildDate>Sun, 19 Apr 2015 18:42:11 +0200</lastBuildDate>
+    <pubDate>Sun, 19 Apr 2015 19:06:32 +0200</pubDate>
+    <lastBuildDate>Sun, 19 Apr 2015 19:06:32 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
         <title>Data-parallelism in timely dataflow</title>
-        <description>&lt;p&gt;The &lt;a href=&quot;http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html&quot;&gt;previous post&lt;/a&gt; described a neat algorithm of &lt;a href=&quot;http://arxiv.org/abs/1310.3314&quot;&gt;Ngo et al&lt;/a&gt; and then described how one could implement this in timely dataflow. There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm. In this post, we are going to walk through how the data-parallel part actually happens, and detail some of the moving parts.&lt;/p&gt;
+        <description>&lt;p&gt;The &lt;a href=&quot;http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html&quot;&gt;previous post&lt;/a&gt; described a neat algorithm of &lt;a href=&quot;http://arxiv.org/abs/1310.3314&quot;&gt;Ngo et al&lt;/a&gt; and then described how one could go and implement this in &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;timely dataflow&lt;/a&gt;. There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm.&lt;/p&gt;
+
+&lt;p&gt;In this post we walk through how the data-parallel bit happens, and detail some of the moving parts.&lt;/p&gt;
 
 &lt;p&gt;Let’s start at the top, with some code we didn’t see in the previous post: a &lt;code&gt;main&lt;/code&gt; method:&lt;/p&gt;
 

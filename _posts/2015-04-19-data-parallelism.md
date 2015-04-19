@@ -6,7 +6,9 @@ categories: dataflow relational join
 published: true
 ---
 
-The [previous post](http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html) described a neat algorithm of [Ngo et al](http://arxiv.org/abs/1310.3314) and then described how one could implement this in timely dataflow. There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm. In this post, we are going to walk through how the data-parallel part actually happens, and detail some of the moving parts.
+The [previous post](http://www.frankmcsherry.org/dataflow/relational/join/2015/04/11/genericjoin.html) described a neat algorithm of [Ngo et al](http://arxiv.org/abs/1310.3314) and then described how one could go and implement this in [timely dataflow](https://github.com/frankmcsherry/timely-dataflow). There were several bits of Rust code, a few places where details were glossed over, and then the claim that this was now a data-parallel implementation of the neat algorithm.
+
+In this post we walk through how the data-parallel bit happens, and detail some of the moving parts.
 
 Let's start at the top, with some code we didn't see in the previous post: a `main` method:
 
