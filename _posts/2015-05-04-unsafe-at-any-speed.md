@@ -17,8 +17,8 @@ I should say that many of the things going on in here look a lot like what goes 
 Our goal is to write a pair of methods with the following signatures:
 
 {% highlight rust %}
-encode<T>(typed: &[T], bytes: &mut Vec<u8>);
-decode<T>(bytes: &[u8]) -> &[T];
+fn encode<T>(typed: &[T], bytes: &mut Vec<u8>);
+fn decode<T>(bytes: &[u8]) -> &[T];
 {% endhighlight %}
 
 That is, if you present a slice of data `&[T]` we can populate a `Vec<u8>` with appropriate binary data. Similarly, if you provide us some binary data `&[u8]`, we can interpret it as typed data `&[T]` for you.
@@ -26,8 +26,8 @@ That is, if you present a slice of data `&[T]` we can populate a `Vec<u8>` with 
 We aren't going to do this by the end of the post, but we'll have something pretty similar. These are the actual signatures at the moment (the implementations are at the end of the post; don't read them yet!):
 
 {% highlight rust %}
-pub fn encode<T: Abomonation>(typed: &Vec<T>, bytes: &mut Vec<u8>);
-pub fn decode<T: Abomonation>(bytes: &mut [u8]) -> &Vec<T>;
+fn encode<T: Abomonation>(typed: &Vec<T>, bytes: &mut Vec<u8>);
+fn decode<T: Abomonation>(bytes: &mut [u8]) -> &Vec<T>;
 {% endhighlight %}
 
 There are important distinctions here, so let's briefly think about what's being said by the interfaces.
@@ -105,7 +105,7 @@ Primitive types are neat and all, but we are serious people! What about things l
 Ok, let's just write down this trait.
 
 {% highlight rust %}
-pub trait Abomonation {
+trait Abomonation {
     unsafe fn entomb(&self, _writer: &mut Vec<u8>) { }
     unsafe fn exhume(&mut self, _bytes: &mut &[u8]) { }
 }
