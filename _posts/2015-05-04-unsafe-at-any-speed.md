@@ -35,8 +35,8 @@ There are important distinctions here, so let's briefly think about what's being
 1. We are only going to be able to do this for **some** types `T`, those implementing `Abomonation`.
    This makes sense, because some types are hard to serialize. The name doesn't make sense. Yet.
 2. We are taking a `&mut [u8]` rather than a `&[u8]`. That's weird. Why would we need exclusive access to the input data? Are we going to change the binary data we've received? (I'm so sorry.)
-3. We are returning a reference to a `Vec<T>`. That is a bit weird; who is going to own that `Vec<T>`?
-   I said we wouldn't be allocating anything, and you (usually) don't get a `Vec<T>` out of nowhere.
+3. We are returning a reference to a `Vec<T>`. Where did that `Vec<T>` come from and who owns it?
+   The `decode` function doesn't take one as a parameter, and you (usually) don't just get references to owned data out of nowhere.
 
 Well isn't that just a big pile of mysterious language? Apparently we are going to do some things, and you should all be terrified.
 
@@ -301,7 +301,7 @@ I wanted to put the implementations up here, but they aren't very pretty. In par
 pub fn encode<T: Abomonation>(typed: &Vec<T>, bytes: &mut Vec<u8>) {
     let slice = unsafe { std::slice::from_raw_parts(mem::transmute(typed), size_of::<Vec<T>>()) };
     bytes.write_all(slice).unwrap();
-    unsafe { typed.entomb(writer); }
+    unsafe { typed.entomb(bytes); }
 }
 {% endhighlight %}
 
