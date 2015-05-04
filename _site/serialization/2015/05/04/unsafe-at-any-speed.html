@@ -246,6 +246,8 @@ All those other primitive types don’t need to either. They can use the default
 
 <p>Pretty much all of these lines (everything except step <code>1.</code>) are unsafe. Because the method has the <code>unsafe</code> tag, we don’t need to flag individual regions as unsafe. They are all <em>quite</em> unsafe.</p>
 
+<p>Let’s take a tranquil moment to reflect on what’s been done, and what might happen. We’ve minted a <code>Vec&lt;T&gt;</code> pointing at memory that cannot be freed. The memory is valid, and the rest of the <code>Vec&lt;T&gt;</code> appears legitimate (length, capacity). But, as soon as we return from this method that <code>Vec&lt;T&gt;</code> is loose in the country-side and who knows what might happen.</p>
+
 <p>Well, what could go wrong, really?</p>
 
 <h2 id="graaaaaaaaarrrrr">GRAAAAAAAAARRRRR!!</h2>
@@ -263,10 +265,10 @@ All those other primitive types don’t need to either. They can use the default
     <p>The <code>&amp;[u8]</code> data is, in fact, exclusively held. We go and transmute it to <code>&amp;mut [u8]</code> which is very wrong unless we are sure that we have the only reference. Fortunately, <code>decode</code> takes a <code>&amp;mut [u8]</code> as its argument, and this ensures that our references are exclusive. We are also careful to partition the <code>&amp;[u8]</code> into disjoint parts when we use it, to maintain this invariant.</p>
   </li>
   <li>
-    <p>The <code>&amp;mut self</code> parameter to <code>exhume</code> will not be dropped. It is important that we not drop the <code>Vec</code>, as that will attempt to release the backing memory, which … well it isn’t going to work out. Making a fake <code>Vec</code> that points somewhere in memory is ok as long as it is a fake <code>Vec</code>.</p>
+    <p>The <code>&amp;mut self</code> parameter to <code>exhume</code> will only be presented outwards as a <code>&amp;self</code>. We can’t let anyone mutate or own this data. Trying to add elements to <code>Vec</code> will trigger a re-alloction, which would attempt to release the memory. It is very important that all references to the data are just that, only references. And references with lifetimes bounded by the source <code>&amp;[u8]</code>.</p>
   </li>
   <li>
-    <p>The <code>&amp;mut self</code> parameter to <code>exhume</code> will only be presented outwards as a <code>&amp;self</code>. We can’t let anyone mutate or own this data. Trying to add elements to <code>Vec</code> will trigger a re-alloction, which would attempt to release the memory. The <code>Vec</code> needs to go away quietly once it has been used.</p>
+    <p>The <code>&amp;mut self</code> parameter to <code>exhume</code> will not be dropped. It is important that we not drop the <code>Vec</code>, as that will attempt to release the backing memory, which … well it isn’t going to work out. Fortunately, there never was a <code>Vec</code>. There were some bytes, and we pretended that a reference to the bytes was actually a reference to a <code>Vec</code>, but there was no <code>Vec</code> to drop.</p>
   </li>
 </ol>
 

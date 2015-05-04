@@ -200,6 +200,8 @@ unsafe fn exhume(&mut self, bytes: &mut &[u8]) {
 
 Pretty much all of these lines (everything except step `1.`) are unsafe. Because the method has the `unsafe` tag, we don't need to flag individual regions as unsafe. They are all *quite* unsafe.
 
+Let's take a tranquil moment to reflect on what's been done, and what might happen. We've minted a `Vec<T>` pointing at memory that cannot be freed. The memory is valid, and the rest of the `Vec<T>` appears legitimate (length, capacity). But, as soon as we return from this method that `Vec<T>` is loose in the country-side and who knows what might happen.
+
 Well, what could go wrong, really?
 
 ## GRAAAAAAAAARRRRR!!
@@ -214,9 +216,9 @@ First, let's be clear that `exhume` is `unsafe`. Don't call it. I haven't figure
 
 1. The `&[u8]` data is, in fact, exclusively held. We go and transmute it to `&mut [u8]` which is very wrong unless we are sure that we have the only reference. Fortunately, `decode` takes a `&mut [u8]` as its argument, and this ensures that our references are exclusive. We are also careful to partition the `&[u8]` into disjoint parts when we use it, to maintain this invariant.
 
-2. The `&mut self` parameter to `exhume` will not be dropped. It is important that we not drop the `Vec`, as that will attempt to release the backing memory, which ... well it isn't going to work out. Making a fake `Vec` that points somewhere in memory is ok as long as it is a fake `Vec`.
+2. The `&mut self` parameter to `exhume` will only be presented outwards as a `&self`. We can't let anyone mutate or own this data. Trying to add elements to `Vec` will trigger a re-alloction, which would attempt to release the memory. It is very important that all references to the data are just that, only references. And references with lifetimes bounded by the source `&[u8]`.
 
-3. The `&mut self` parameter to `exhume` will only be presented outwards as a `&self`. We can't let anyone mutate or own this data. Trying to add elements to `Vec` will trigger a re-alloction, which would attempt to release the memory. The `Vec` needs to go away quietly once it has been used.
+3. The `&mut self` parameter to `exhume` will not be dropped. It is important that we not drop the `Vec`, as that will attempt to release the backing memory, which ... well it isn't going to work out. Fortunately, there never was a `Vec`. There were some bytes, and we pretended that a reference to the bytes was actually a reference to a `Vec`, but there was no `Vec` to drop.
 
 There are probably some other assumptions. Everything breaks if you pass in invalid data, for example. Don't do that either.
 

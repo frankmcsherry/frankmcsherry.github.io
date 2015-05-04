@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 20:47:26 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 20:47:26 +0200</lastBuildDate>
+    <pubDate>Mon, 04 May 2015 23:12:49 +0200</pubDate>
+    <lastBuildDate>Mon, 04 May 2015 23:12:49 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -193,6 +193,8 @@ All those other primitive types don’t need to either. They can use the default
 
 &lt;p&gt;Pretty much all of these lines (everything except step &lt;code&gt;1.&lt;/code&gt;) are unsafe. Because the method has the &lt;code&gt;unsafe&lt;/code&gt; tag, we don’t need to flag individual regions as unsafe. They are all &lt;em&gt;quite&lt;/em&gt; unsafe.&lt;/p&gt;
 
+&lt;p&gt;Let’s take a tranquil moment to reflect on what’s been done, and what might happen. We’ve minted a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; pointing at memory that cannot be freed. The memory is valid, and the rest of the &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; appears legitimate (length, capacity). But, as soon as we return from this method that &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; is loose in the country-side and who knows what might happen.&lt;/p&gt;
+
 &lt;p&gt;Well, what could go wrong, really?&lt;/p&gt;
 
 &lt;h2 id=&quot;graaaaaaaaarrrrr&quot;&gt;GRAAAAAAAAARRRRR!!&lt;/h2&gt;
@@ -210,10 +212,10 @@ All those other primitive types don’t need to either. They can use the default
     &lt;p&gt;The &lt;code&gt;&amp;amp;[u8]&lt;/code&gt; data is, in fact, exclusively held. We go and transmute it to &lt;code&gt;&amp;amp;mut [u8]&lt;/code&gt; which is very wrong unless we are sure that we have the only reference. Fortunately, &lt;code&gt;decode&lt;/code&gt; takes a &lt;code&gt;&amp;amp;mut [u8]&lt;/code&gt; as its argument, and this ensures that our references are exclusive. We are also careful to partition the &lt;code&gt;&amp;amp;[u8]&lt;/code&gt; into disjoint parts when we use it, to maintain this invariant.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;The &lt;code&gt;&amp;amp;mut self&lt;/code&gt; parameter to &lt;code&gt;exhume&lt;/code&gt; will not be dropped. It is important that we not drop the &lt;code&gt;Vec&lt;/code&gt;, as that will attempt to release the backing memory, which … well it isn’t going to work out. Making a fake &lt;code&gt;Vec&lt;/code&gt; that points somewhere in memory is ok as long as it is a fake &lt;code&gt;Vec&lt;/code&gt;.&lt;/p&gt;
+    &lt;p&gt;The &lt;code&gt;&amp;amp;mut self&lt;/code&gt; parameter to &lt;code&gt;exhume&lt;/code&gt; will only be presented outwards as a &lt;code&gt;&amp;amp;self&lt;/code&gt;. We can’t let anyone mutate or own this data. Trying to add elements to &lt;code&gt;Vec&lt;/code&gt; will trigger a re-alloction, which would attempt to release the memory. It is very important that all references to the data are just that, only references. And references with lifetimes bounded by the source &lt;code&gt;&amp;amp;[u8]&lt;/code&gt;.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;The &lt;code&gt;&amp;amp;mut self&lt;/code&gt; parameter to &lt;code&gt;exhume&lt;/code&gt; will only be presented outwards as a &lt;code&gt;&amp;amp;self&lt;/code&gt;. We can’t let anyone mutate or own this data. Trying to add elements to &lt;code&gt;Vec&lt;/code&gt; will trigger a re-alloction, which would attempt to release the memory. The &lt;code&gt;Vec&lt;/code&gt; needs to go away quietly once it has been used.&lt;/p&gt;
+    &lt;p&gt;The &lt;code&gt;&amp;amp;mut self&lt;/code&gt; parameter to &lt;code&gt;exhume&lt;/code&gt; will not be dropped. It is important that we not drop the &lt;code&gt;Vec&lt;/code&gt;, as that will attempt to release the backing memory, which … well it isn’t going to work out. Fortunately, there never was a &lt;code&gt;Vec&lt;/code&gt;. There were some bytes, and we pretended that a reference to the bytes was actually a reference to a &lt;code&gt;Vec&lt;/code&gt;, but there was no &lt;code&gt;Vec&lt;/code&gt; to drop.&lt;/p&gt;
   &lt;/li&gt;
 &lt;/ol&gt;
 
