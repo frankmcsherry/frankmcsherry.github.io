@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 13:03:16 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 13:03:16 +0200</lastBuildDate>
+    <pubDate>Mon, 04 May 2015 13:13:51 +0200</pubDate>
+    <lastBuildDate>Mon, 04 May 2015 13:13:51 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -56,7 +56,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a &lt
 
 &lt;p&gt;Notice the &lt;code&gt;unsafe&lt;/code&gt; label on the function. This is because it uses the &lt;code&gt;from_raw_parts&lt;/code&gt; method, which is itself unsafe (it doesn’t check to make sure that the underlying data look correct). In this case it is safe, because we only want to look at the binary data (not mutate it) and every byte is a valid &lt;code&gt;u8&lt;/code&gt;.&lt;/p&gt;
 
-&lt;p&gt;I could remove the &lt;code&gt;unsafe&lt;/code&gt; label and put unsafe interally like so, declaring the method safe:&lt;/p&gt;
+&lt;p&gt;I could choose to remove the &lt;code&gt;unsafe&lt;/code&gt; label and put unsafe interally like so, declaring the method safe:&lt;/p&gt;
 
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;typed_to_bytes&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;slice&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;])&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
     &lt;span class=&quot;k&quot;&gt;unsafe&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
@@ -64,6 +64,8 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a &lt
                                    &lt;span class=&quot;n&quot;&gt;slice&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mem&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;size_of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt;
     &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;I have been warned this is bad, though, because reading a struct-padding byte is undefined behavior. This will not be the most irresponsible thing that happens in this post.&lt;/p&gt;
 
 &lt;p&gt;On the other end of the safety spectrum, I present:&lt;/p&gt;
 

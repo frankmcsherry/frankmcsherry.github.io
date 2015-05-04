@@ -109,7 +109,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a <co
 
 <p>Notice the <code>unsafe</code> label on the function. This is because it uses the <code>from_raw_parts</code> method, which is itself unsafe (it doesn’t check to make sure that the underlying data look correct). In this case it is safe, because we only want to look at the binary data (not mutate it) and every byte is a valid <code>u8</code>.</p>
 
-<p>I could remove the <code>unsafe</code> label and put unsafe interally like so, declaring the method safe:</p>
+<p>I could choose to remove the <code>unsafe</code> label and put unsafe interally like so, declaring the method safe:</p>
 
 <div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">typed_to_bytes</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">slice</span><span class="o">:</span> <span class="o">&amp;</span><span class="p">[</span><span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="o">&amp;</span><span class="p">[</span><span class="kt">u8</span><span class="p">]</span> <span class="p">{</span>
     <span class="k">unsafe</span> <span class="p">{</span>
@@ -117,6 +117,8 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a <co
                                    <span class="n">slice</span><span class="p">.</span><span class="n">len</span><span class="p">()</span> <span class="o">*</span> <span class="n">mem</span><span class="o">::</span><span class="n">size_of</span><span class="o">::&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">())</span>
     <span class="p">}</span>
 <span class="p">}</span></code></pre></div>
+
+<p>I have been warned this is bad, though, because reading a struct-padding byte is undefined behavior. This will not be the most irresponsible thing that happens in this post.</p>
 
 <p>On the other end of the safety spectrum, I present:</p>
 

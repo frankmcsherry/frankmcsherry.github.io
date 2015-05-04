@@ -55,7 +55,7 @@ unsafe fn typed_to_bytes<T>(slice: &[T]) -> &[u8] {
 
 Notice the `unsafe` label on the function. This is because it uses the `from_raw_parts` method, which is itself unsafe (it doesn't check to make sure that the underlying data look correct). In this case it is safe, because we only want to look at the binary data (not mutate it) and every byte is a valid `u8`.
 
-I could remove the `unsafe` label and put unsafe interally like so, declaring the method safe:
+I could choose to remove the `unsafe` label and put unsafe interally like so, declaring the method safe:
 
 {% highlight rust %}
 fn typed_to_bytes<T>(slice: &[T]) -> &[u8] {
@@ -65,6 +65,8 @@ fn typed_to_bytes<T>(slice: &[T]) -> &[u8] {
     }
 }
 {% endhighlight %}
+
+I have been warned this is bad, though, because reading a struct-padding byte is undefined behavior. This will not be the most irresponsible thing that happens in this post.
 
 On the other end of the safety spectrum, I present:
 {% highlight rust %}
