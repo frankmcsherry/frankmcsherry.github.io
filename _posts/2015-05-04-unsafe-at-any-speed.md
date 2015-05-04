@@ -279,7 +279,7 @@ fn _bench_dec<T: Abomonation+Eq>(bencher: &mut Bencher, vector: &Vec<T>) {
 }
 {% endhighlight %}
 
-These give pretty comparable result. Apparently pushing a bunch of bytes works at about the same rate as checking that those bytes are what you expected. Again, not goodput numbers; *caveat emptor*.
+These give pretty comparable results. Apparently pushing a bunch of bytes works at about the same rate as checking that those bytes are what you expected. Again, not goodput numbers; *caveat emptor*.
 
     test bench_dec_u64     ... bench:       525 ns/iter (+/- 262) = 15649 MB/s
     test bench_dec_string  ... bench:     11289 ns/iter (+/- 2432) = 3086 MB/s
