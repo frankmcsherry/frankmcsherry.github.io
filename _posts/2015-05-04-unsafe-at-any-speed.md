@@ -285,7 +285,7 @@ These give pretty comparable results. Apparently pushing a bunch of bytes works 
     test bench_dec_string  ... bench:     11289 ns/iter (+/- 2432) = 3086 MB/s
     test bench_dec_vec_u_s ... bench:     12557 ns/iter (+/- 2183) = 3488 MB/s
 
-Just show how silly things are, here are the numbers where we comment out the assert loop, just checking the resulting lengths.
+Just to show how silly things are, here are the numbers where we comment out the assert loop, just checking the resulting lengths.
 
     test bench_dec_u64     ... bench:         2 ns/iter (+/- 0) = 4108000 MB/s
     test bench_dec_string  ... bench:      2625 ns/iter (+/- 1031) = 13272 MB/s

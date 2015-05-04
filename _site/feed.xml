@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 20:25:59 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 20:25:59 +0200</lastBuildDate>
+    <pubDate>Mon, 04 May 2015 20:47:26 +0200</pubDate>
+    <lastBuildDate>Mon, 04 May 2015 20:47:26 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -282,7 +282,7 @@ test bench_dec_string  ... bench:     11289 ns/iter (+/- 2432) = 3086 MB/s
 test bench_dec_vec_u_s ... bench:     12557 ns/iter (+/- 2183) = 3488 MB/s
 &lt;/code&gt;&lt;/pre&gt;
 
-&lt;p&gt;Just show how silly things are, here are the numbers where we comment out the assert loop, just checking the resulting lengths.&lt;/p&gt;
+&lt;p&gt;Just to show how silly things are, here are the numbers where we comment out the assert loop, just checking the resulting lengths.&lt;/p&gt;
 
 &lt;pre&gt;&lt;code&gt;test bench_dec_u64     ... bench:         2 ns/iter (+/- 0) = 4108000 MB/s
 test bench_dec_string  ... bench:      2625 ns/iter (+/- 1031) = 13272 MB/s
