@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 20:18:34 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 20:18:34 +0200</lastBuildDate>
+    <pubDate>Mon, 04 May 2015 20:25:59 +0200</pubDate>
+    <lastBuildDate>Mon, 04 May 2015 20:25:59 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -161,7 +161,7 @@ All those other primitive types don’t need to either. They can use the default
 
 &lt;p&gt;You know, this might just work. A &lt;code&gt;Vec&lt;/code&gt; is a pointer, a length, and a capacity. Three &lt;code&gt;usize&lt;/code&gt; values. Serializing this triple doesn’t serialize the &lt;code&gt;Vec&lt;/code&gt;’s &lt;em&gt;contents&lt;/em&gt;, but we can just do that in &lt;code&gt;Vec&lt;/code&gt;’s &lt;code&gt;entomb&lt;/code&gt;. Similarly, when we pick up the serialized form of the &lt;code&gt;Vec&lt;/code&gt;, a triple, it doesn’t point at anything valid (to our great shame, it points at some location in memory wherever we serialized this), but  &lt;code&gt;exhume&lt;/code&gt; gives us a chance to read valid data back and make things right.&lt;/p&gt;
 
-&lt;p&gt;If the scientist did something responsible in &lt;code&gt;exhume&lt;/code&gt;, like create a new &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; with new backing memory and assign it to &lt;code&gt;*self&lt;/code&gt;, there wouldn’t be a problem. But our story doesn’t follow that path.&lt;/p&gt;
+&lt;p&gt;If the scientist did something responsible in &lt;code&gt;exhume&lt;/code&gt;, like create a new &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; with new backing memory and assign it to &lt;code&gt;*self&lt;/code&gt;, the story ends happily. But our story doesn’t follow that path.&lt;/p&gt;
 
 &lt;h2 id=&quot;writing-the-code-that-shouldnt-be-written&quot;&gt;Writing the code that shouldn’t be written&lt;/h2&gt;
 

@@ -166,7 +166,7 @@ impl<T> Abomonation for Vec<T> where T: Abomonation {
 
 You know, this might just work. A `Vec` is a pointer, a length, and a capacity. Three `usize` values. Serializing this triple doesn't serialize the `Vec`'s *contents*, but we can just do that in `Vec`'s `entomb`. Similarly, when we pick up the serialized form of the `Vec`, a triple, it doesn't point at anything valid (to our great shame, it points at some location in memory wherever we serialized this), but  `exhume` gives us a chance to read valid data back and make things right.
 
-If the scientist did something responsible in `exhume`, like create a new `Vec<T>` with new backing memory and assign it to `*self`, there wouldn't be a problem. But our story doesn't follow that path.
+If the scientist did something responsible in `exhume`, like create a new `Vec<T>` with new backing memory and assign it to `*self`, the story ends happily. But our story doesn't follow that path.
 
 ## Writing the code that shouldn't be written
 

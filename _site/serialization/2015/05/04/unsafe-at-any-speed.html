@@ -214,7 +214,7 @@ All those other primitive types don’t need to either. They can use the default
 
 <p>You know, this might just work. A <code>Vec</code> is a pointer, a length, and a capacity. Three <code>usize</code> values. Serializing this triple doesn’t serialize the <code>Vec</code>’s <em>contents</em>, but we can just do that in <code>Vec</code>’s <code>entomb</code>. Similarly, when we pick up the serialized form of the <code>Vec</code>, a triple, it doesn’t point at anything valid (to our great shame, it points at some location in memory wherever we serialized this), but  <code>exhume</code> gives us a chance to read valid data back and make things right.</p>
 
-<p>If the scientist did something responsible in <code>exhume</code>, like create a new <code>Vec&lt;T&gt;</code> with new backing memory and assign it to <code>*self</code>, there wouldn’t be a problem. But our story doesn’t follow that path.</p>
+<p>If the scientist did something responsible in <code>exhume</code>, like create a new <code>Vec&lt;T&gt;</code> with new backing memory and assign it to <code>*self</code>, the story ends happily. But our story doesn’t follow that path.</p>
 
 <h2 id="writing-the-code-that-shouldnt-be-written">Writing the code that shouldn’t be written</h2>
 
