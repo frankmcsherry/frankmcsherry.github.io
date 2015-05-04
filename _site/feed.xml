@@ -5,15 +5,15 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 13:13:51 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 13:13:51 +0200</lastBuildDate>
+    <pubDate>Mon, 04 May 2015 15:40:52 +0200</pubDate>
+    <lastBuildDate>Mon, 04 May 2015 15:40:52 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
         <title>Abomonation: terrifying serialization</title>
         <description>&lt;p&gt;Today we’re going to look at a simple serialization library written in Rust. Simple and utterly terrifying.&lt;/p&gt;
 
-&lt;p&gt;The library, Abomonation (you’ll understand soon), uses Rust’s &lt;code&gt;unsafe&lt;/code&gt; keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.&lt;/p&gt;
+&lt;p&gt;The library, Abomonation (typo intentional), uses Rust’s &lt;code&gt;unsafe&lt;/code&gt; keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.&lt;/p&gt;
 
 &lt;p&gt;I should say that many of the things going on in here look a lot like what goes on in &lt;a href=&quot;https://capnproto.org&quot;&gt;CapnProto&lt;/a&gt;. If you are serious about being a grown-up about things, I would absolutely look over there. Among other things, it has the advantage of not necessarily lowering your opinion of me, unlike this post.&lt;/p&gt;
 
@@ -96,7 +96,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a &lt
 
 &lt;p&gt;Primitive types are neat and all, but we are serious people! What about things like tuples? Surely I should be able to transmute a &lt;code&gt;&amp;amp;[(u64, i8)]&lt;/code&gt; to binary and back, right? Yes, you should. But…&lt;/p&gt;
 
-&lt;p&gt;… its complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.&lt;/p&gt;
+&lt;p&gt;… it’s complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.&lt;/p&gt;
 
 &lt;p&gt;Ok, let’s just write down this trait.&lt;/p&gt;
 
@@ -118,7 +118,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a &lt
   &lt;/li&gt;
 &lt;/ul&gt;
 
-&lt;p&gt;The reason this trait exists is because our method &lt;code&gt;encode(&amp;amp;Vec&amp;lt;T&amp;gt;, &amp;amp;mut Vec&amp;lt;u8&amp;gt;)&lt;/code&gt; is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing &lt;code&gt;Abomonation&lt;/code&gt;, but we will use &lt;code&gt;entomb&lt;/code&gt; to check with each &lt;code&gt;T&lt;/code&gt; to see if they want to write any more. Similarly, &lt;code&gt;decode&lt;/code&gt; uses &lt;code&gt;exhume&lt;/code&gt; on each element to recover any owned data.&lt;/p&gt;
+&lt;p&gt;The reason this trait exists is because our method &lt;code&gt;encode(&amp;amp;Vec&amp;lt;T&amp;gt;, &amp;amp;mut Vec&amp;lt;u8&amp;gt;)&lt;/code&gt; is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing &lt;code&gt;Abomonation&lt;/code&gt; so far, but we will use &lt;code&gt;entomb&lt;/code&gt; to check with each &lt;code&gt;T&lt;/code&gt; to see if they want to write any more. Similarly, &lt;code&gt;decode&lt;/code&gt; uses &lt;code&gt;exhume&lt;/code&gt; on each element to recover any owned data.&lt;/p&gt;
 
 &lt;p&gt;Wait, owned data? What? I mean, &lt;code&gt;u64&lt;/code&gt; doesn’t own any data, so does it need to do anything? Nope!&lt;br /&gt;
 All those other primitive types don’t need to either. They can use the default empty implementation.&lt;/p&gt;

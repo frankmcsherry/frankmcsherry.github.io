@@ -8,7 +8,7 @@ published: true
 
 Today we're going to look at a simple serialization library written in Rust. Simple and utterly terrifying.
 
-The library, Abomonation (you'll understand soon), uses Rust's `unsafe` keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.
+The library, Abomonation (typo intentional), uses Rust's `unsafe` keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.
 
 I should say that many of the things going on in here look a lot like what goes on in [CapnProto](https://capnproto.org). If you are serious about being a grown-up about things, I would absolutely look over there. Among other things, it has the advantage of not necessarily lowering your opinion of me, unlike this post.
 
@@ -100,7 +100,7 @@ Notice that these implementations don't *do* anything, they just indicate that i
 
 Primitive types are neat and all, but we are serious people! What about things like tuples? Surely I should be able to transmute a `&[(u64, i8)]` to binary and back, right? Yes, you should. But...
 
-... its complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.
+... it's complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.
 
 Ok, let's just write down this trait.
 
@@ -119,7 +119,7 @@ The two methods have the following intents:
 
 * `exhume`: having populated `&mut self` with binary data, deserialize data it owned.
 
-The reason this trait exists is because our method `encode(&Vec<T>, &mut Vec<u8>)` is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing `Abomonation`, but we will use `entomb` to check with each `T` to see if they want to write any more. Similarly, `decode` uses `exhume` on each element to recover any owned data.
+The reason this trait exists is because our method `encode(&Vec<T>, &mut Vec<u8>)` is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing `Abomonation` so far, but we will use `entomb` to check with each `T` to see if they want to write any more. Similarly, `decode` uses `exhume` on each element to recover any owned data.
 
 
 

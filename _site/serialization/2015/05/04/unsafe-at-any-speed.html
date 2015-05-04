@@ -66,7 +66,7 @@
   <article class="post-content">
     <p>Today we’re going to look at a simple serialization library written in Rust. Simple and utterly terrifying.</p>
 
-<p>The library, Abomonation (you’ll understand soon), uses Rust’s <code>unsafe</code> keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.</p>
+<p>The library, Abomonation (typo intentional), uses Rust’s <code>unsafe</code> keyword in some interesting ways. The intent is that it is actually safe if you only deserialize binary data serialized by the library.</p>
 
 <p>I should say that many of the things going on in here look a lot like what goes on in <a href="https://capnproto.org">CapnProto</a>. If you are serious about being a grown-up about things, I would absolutely look over there. Among other things, it has the advantage of not necessarily lowering your opinion of me, unlike this post.</p>
 
@@ -149,7 +149,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a <co
 
 <p>Primitive types are neat and all, but we are serious people! What about things like tuples? Surely I should be able to transmute a <code>&amp;[(u64, i8)]</code> to binary and back, right? Yes, you should. But…</p>
 
-<p>… its complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.</p>
+<p>… it’s complicated. You see, we built this trait to reach beyond primitive types. Much further beyond.</p>
 
 <p>Ok, let’s just write down this trait.</p>
 
@@ -171,7 +171,7 @@ I said we wouldn’t be allocating anything, and you (usually) don’t get a <co
   </li>
 </ul>
 
-<p>The reason this trait exists is because our method <code>encode(&amp;Vec&lt;T&gt;, &amp;mut Vec&lt;u8&gt;)</code> is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing <code>Abomonation</code>, but we will use <code>entomb</code> to check with each <code>T</code> to see if they want to write any more. Similarly, <code>decode</code> uses <code>exhume</code> on each element to recover any owned data.</p>
+<p>The reason this trait exists is because our method <code>encode(&amp;Vec&lt;T&gt;, &amp;mut Vec&lt;u8&gt;)</code> is just going to copy the contents of the typed vector into the binary vector. Seems harmless enough for the types implementing <code>Abomonation</code> so far, but we will use <code>entomb</code> to check with each <code>T</code> to see if they want to write any more. Similarly, <code>decode</code> uses <code>exhume</code> on each element to recover any owned data.</p>
 
 <p>Wait, owned data? What? I mean, <code>u64</code> doesn’t own any data, so does it need to do anything? Nope!<br />
 All those other primitive types don’t need to either. They can use the default empty implementation.</p>
