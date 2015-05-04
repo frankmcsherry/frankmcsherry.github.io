@@ -216,9 +216,9 @@ First, let's be clear that `exhume` is `unsafe`. Don't call it. I haven't figure
 
 1. The `&[u8]` data is, in fact, exclusively held. We go and transmute it to `&mut [u8]` which is very wrong unless we are sure that we have the only reference. Fortunately, `decode` takes a `&mut [u8]` as its argument, and this ensures that our references are exclusive. We are also careful to partition the `&[u8]` into disjoint parts when we use it, to maintain this invariant.
 
-2. The `&mut self` parameter to `exhume` will only be presented outwards as a `&self`. We can't let anyone mutate or own this data. Trying to add elements to `Vec` will trigger a re-alloction, which would attempt to release the memory. It is very important that all references to the data are just that, only references. And references with lifetimes bounded by the source `&[u8]`.
+2. The `&mut self` parameter to `exhume` will only be presented outwards as a `&self`. We can't let anyone mutate or own this data. Trying to add elements to `Vec` will trigger a re-alloction, which would attempt to release the memory. It is very important that all references to the data are just that, only references. And references with lifetimes bounded by that of the source `&[u8]`.
 
-3. The `&mut self` parameter to `exhume` will not be dropped. It is important that we not drop the `Vec`, as that will attempt to release the backing memory, which ... well it isn't going to work out. Fortunately, there never was a `Vec`. There were some bytes, and we pretended that a reference to the bytes was actually a reference to a `Vec`, but there was no `Vec` to drop.
+3. The `&mut self` parameter to `exhume` will never be dropped. Dropping the `Vec` would attempt to release the backing memory, which ... well it isn't going to work out. Fortunately, there never was a `Vec`. There were some bytes, and we pretended that a reference to the bytes was actually a reference to a `Vec`, but there was never a `Vec` to drop.
 
 There are probably some other assumptions. Everything breaks if you pass in invalid data, for example. Don't do that either.
 
