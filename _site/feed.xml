@@ -5,9 +5,217 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 May 2015 23:14:46 +0200</pubDate>
-    <lastBuildDate>Mon, 04 May 2015 23:14:46 +0200</lastBuildDate>
+    <pubDate>Tue, 12 May 2015 15:27:45 +0200</pubDate>
+    <lastBuildDate>Tue, 12 May 2015 15:27:45 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
+    
+      <item>
+        <title>Differential graph computation</title>
+        <description>&lt;p&gt;I recently received an email asking if &lt;a href=&quot;http://research.microsoft.com/apps/pubs/default.aspx?id=176693&quot;&gt;differential dataflow&lt;/a&gt; might be a good fit for &lt;a href=&quot;http://en.wikipedia.org/wiki/Breadth-first_search&quot;&gt;breadth-first search&lt;/a&gt; in evolving graphs. I think it is a great fit, and I pushed a &lt;a href=&quot;https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs&quot;&gt;breadth-first search example&lt;/a&gt; to the &lt;a href=&quot;https://github.com/frankmcsherry/differential-dataflow&quot;&gt;differential dataflow repository&lt;/a&gt; in my delight and satisfaction.&lt;/p&gt;
+
+&lt;p&gt;Around the same time I got a different email, asking if the recent &lt;a href=&quot;https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-iyer.pdf&quot;&gt;CellIQ paper&lt;/a&gt; from NSDI, which does incremental connected components, is fundamentally new or might their “GStream” API be easily cast in something like &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;timely dataflow&lt;/a&gt; or &lt;a href=&quot;https://github.com/frankmcsherry/differential-dataflow&quot;&gt;differential dataflow&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Now, I suspect this person was just a disgruntled trouble-maker. The GStream API (Listing 2) is clearly covered by differential dataflow, which allows arbitrary incremental updates to iterative computations containing operators like &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, enough for many data-parallel graph computations. Whether it can be done is different from whether it can be done &lt;em&gt;well&lt;/em&gt;, though.&lt;/p&gt;
+
+&lt;p&gt;The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed &lt;em&gt;“using &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, this can be very inefficient”&lt;/em&gt;, because &lt;em&gt;“join operators are not optimized for graph processing and can be very expensive.”&lt;/em&gt; They then cite some papers which, coincidentally, were try to sell you special-purpose graph processors.&lt;/p&gt;
+
+&lt;p&gt;These authors are not wrong: it &lt;em&gt;can&lt;/em&gt; be very inefficient and expensive, especially if you use a previous-generation platform not designed from the ground up to handle streaming iterative computation.&lt;/p&gt;
+
+&lt;p&gt;Let’s see what happens if you build on something better, using just &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, of course.&lt;/p&gt;
+
+&lt;h2 id=&quot;differential-dataflow&quot;&gt;Differential dataflow&lt;/h2&gt;
+
+&lt;p&gt;Differential dataflow is a way of implementing data-parallel dataflow computations so that work is done only in response to changes in the data. If you change one input to your computation, you would prefer not to re-evaluate the entire computation. Rather, changes to the input produces some changes in the output of your first dataflow operator, which are then changes to the inputs of subsequent operators. Eventually these changes either evaporate or spill out the end of your dataflow as changed outputs.&lt;/p&gt;
+
+&lt;p&gt;Chasing these changes and doing &lt;em&gt;only&lt;/em&gt; this work is what differential dataflow does well.&lt;/p&gt;
+
+&lt;p&gt;Importantly—and as far as we are aware, uniquely—differential dataflow also maintains this property in the context of iterative dataflow computations.&lt;/p&gt;
+
+&lt;p&gt;Going through the math for this usually results in long-lasting head-aches for the readers, so I’ll summarize instead. As changes flow around the dataflow, they “happen” at various logical times. These times reflect the epoch of streaming input data, and iteration counters for any loops they may be contained in. Rather than eagerly aggregate these changes, we leave them disaggregated, allowing future computation to use arbitrary subsets of the changes. Although we leave ourselves more work to do for each change, we end up with an orders-of-magnitude reduction in the numbers of changes.&lt;/p&gt;
+
+&lt;p&gt;We might be getting ahead of ourselves with detail. Let’s step back and set some context.&lt;/p&gt;
+
+&lt;h2 id=&quot;data-parallel-dataflow&quot;&gt;Data-parallel dataflow&lt;/h2&gt;
+
+&lt;p&gt;The big-data-scenti have caught up with the idea that we should use high-level programming constructs to describe data-parallel computations. Two operators I’ll detail are &lt;code&gt;group_by&lt;/code&gt; and &lt;code&gt;join&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Warning&lt;/strong&gt; : I’m going to over-simplify some of the operators in the coming sections. I recommend checking out &lt;a href=&quot;https://github.com/frankmcsherry/differential-dataflow/tree/master/src/operators&quot;&gt;the code&lt;/a&gt; for the real details, some of which are smart and some of which are gross.&lt;/p&gt;
+
+&lt;h4 id=&quot;group-by&quot;&gt;Group By&lt;/h4&gt;
+
+&lt;p&gt;The &lt;code&gt;group_by&lt;/code&gt; operator acts on a collection of records. I’ll imagine a type &lt;code&gt;Stream&amp;lt;D&amp;gt;&lt;/code&gt; to indicate a not-yet-fully-formed data collection of records of type &lt;code&gt;D&lt;/code&gt;. In this setting, &lt;code&gt;group_by&lt;/code&gt; has the following sort of signature:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;fn group_by&amp;lt;K, V, F, R&amp;gt;(inp: Stream&amp;lt;(K,V)&amp;gt;, red: F) -&amp;gt; Stream&amp;lt;R&amp;gt;
+    where F: Fn(&amp;amp;K, &amp;amp;[V], &amp;amp;mut Vec&amp;lt;R&amp;gt;);
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;For those of you familar with &lt;code&gt;map&lt;/code&gt; and &lt;code&gt;reduce&lt;/code&gt;, the &lt;code&gt;group_by&lt;/code&gt; function is basically like &lt;code&gt;reduce&lt;/code&gt;. The operator acts on a stream of key-value pairs, groups incoming pairs by their key value, and applies the reduction function &lt;code&gt;red&lt;/code&gt; to each non-empty pair of key and matching records.&lt;/p&gt;
+
+&lt;p&gt;They way I’ve done this, it gets a mutable vector of elements &lt;code&gt;R&lt;/code&gt; and it is supposed to write into them. I’m open to other suggestions. It turns out that writing tasteful interfaces to performant code is hard.&lt;/p&gt;
+
+&lt;h4 id=&quot;join&quot;&gt;Join&lt;/h4&gt;
+
+&lt;p&gt;The second important (for this post) data-parallel operator is &lt;code&gt;join&lt;/code&gt;, a binary operator matching pairs of input records with the same key.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;fn join&amp;lt;K, V1, V2&amp;gt;(in1: Stream&amp;lt;(K,V1)&amp;gt;, in2: Stream&amp;lt;(K,V2)&amp;gt;) -&amp;gt; Stream&amp;lt;(K,V1,V2)&amp;gt;;
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;The &lt;code&gt;join&lt;/code&gt; operator is &lt;em&gt;bi-linear&lt;/em&gt;, which means it has some nice mathematical properties (roughly: each input can be processed record-at-a-time, oblivious to other records from the same input).&lt;/p&gt;
+
+&lt;h4 id=&quot;other-operators&quot;&gt;Other operators&lt;/h4&gt;
+
+&lt;p&gt;So I lied. We are going to add some more simple operators such as &lt;code&gt;map&lt;/code&gt;, &lt;code&gt;filter&lt;/code&gt;, and &lt;code&gt;concat&lt;/code&gt;. These operators do not involve any data movement or grouping, and can always be performed &lt;em&gt;in situ&lt;/em&gt;. They are also &lt;em&gt;linear&lt;/em&gt;, and consequently &lt;a href=&quot;https://users.soe.ucsc.edu/~abadi/Papers/differential_revision-app.pdf&quot;&gt;do not need any special differential dataflow implementation&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;prelude-bread-first-search&quot;&gt;Prelude: Bread-first search&lt;/h2&gt;
+
+&lt;p&gt;Let’s use what we have so far start to build up an example of breadth-first search.&lt;/p&gt;
+
+&lt;p&gt;Our approach will be to maintain a stream &lt;code&gt;dists&lt;/code&gt; of pairs &lt;code&gt;(node, dist)&lt;/code&gt;, indicating that &lt;code&gt;node&lt;/code&gt; can be reached using &lt;code&gt;dist&lt;/code&gt; edges. From a supplied set of edges &lt;code&gt;edges&lt;/code&gt;, we want to expand this set by one hop: each node provides the distance in which it can be reached to each of its neighbors, who then retain the smallest distance they’ve seen. I’m going to use &lt;code&gt;u32&lt;/code&gt;s for node identifiers. Sorry.&lt;/p&gt;
+
+&lt;p&gt;Our code follows this intuition, by using a &lt;code&gt;join&lt;/code&gt; to provide the per-node information to neighbors. Under the covers, &lt;code&gt;join&lt;/code&gt; maintains a list of key-value pairs as a trie: a flat list of keys, each with an offset into a flat list of values. Ignoring than the fact that these lists might change, this is the same as the &lt;a href=&quot;http://en.wikipedia.org/wiki/Adjacency_list&quot;&gt;adjacency list&lt;/a&gt; representation of a graph.&lt;/p&gt;
+
+&lt;p&gt;The output of &lt;code&gt;join&lt;/code&gt; then needs to go through a &lt;code&gt;map&lt;/code&gt; to increase the proposed distances by one.&lt;/p&gt;
+
+&lt;p&gt;To the proposals produced by &lt;code&gt;join&lt;/code&gt; we &lt;code&gt;concat&lt;/code&gt; the original distances. You might want one of those.&lt;/p&gt;
+
+&lt;p&gt;Finally, we use &lt;code&gt;group_by&lt;/code&gt; to collect the distance proposals. Here I’m going to cheat and use the fact that my implementation of differential dataflow sorts records in each group (an important part of “consolidation”; details later). To find the least distance, we can just pop the first distance in the sorted order; we are guaranteed one exists, because we wouldn’t have been called if there was no data.&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;step&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Stream&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Stream&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Stream&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;u32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;join_u&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+         &lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+         &lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;concat&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+         &lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;group_by_u&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;t&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;t&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]))&lt;/span&gt;
+ &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;You might have noticed that &lt;code&gt;join_u&lt;/code&gt; and &lt;code&gt;group_by_u&lt;/code&gt; each have a &lt;code&gt;_u&lt;/code&gt; suffix. Rust doesn’t think highly of operator overloading, and so you need to have distinct method names if you would like to have distinct implementations. In this case, we are using an implementation that knows we have unsigned integer keys, and can use a more efficient index (a &lt;code&gt;Vec&lt;/code&gt; rather than a &lt;code&gt;HashMap&lt;/code&gt;).&lt;/p&gt;
+
+&lt;h2 id=&quot;iterative-data-parallel-dataflow&quot;&gt;Iterative data-parallel dataflow&lt;/h2&gt;
+
+&lt;p&gt;We need one more operator. A different kind of operator. A &lt;em&gt;higher-order&lt;/em&gt; operator: we need &lt;code&gt;iterate&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;The &lt;code&gt;iterate&lt;/code&gt; operator has a simple signature (these higher-order things always do, don’t they?)&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;fn iterate&amp;lt;D, F: FnOnce(Stream&amp;lt;D&amp;gt;)-&amp;gt;Stream&amp;lt;D&amp;gt;&amp;gt;(s: Stream&amp;lt;D&amp;gt;, f: F) -&amp;gt; Stream&amp;lt;D&amp;gt;;
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;The operator takes a stream, and a description of how to act on the stream. Its output is the result of acting on the input stream in the supplied manner a very large number of times.&lt;/p&gt;
+
+&lt;p&gt;Of course, since &lt;code&gt;iterate&lt;/code&gt; just takes a description of what to do repeatedly, it doesn’t define any data movement or new computation itself. In actual fact, we will need a few helpers behind the scenes to tell just when we can stop computing, but we don’t need to detail them to understand what &lt;code&gt;iterate&lt;/code&gt; is supposed to produce.&lt;/p&gt;
+
+&lt;p&gt;The &lt;code&gt;iterate&lt;/code&gt; operator is &lt;strong&gt;incredibly important&lt;/strong&gt; for efficient computation. It explains to your computer that you plan to do the same thing multiple times, and that it might be a good idea to spend a bit of effort to take advantage of that. Although you can do graph computation by repeatedly invoking &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, you are doing your computer a disservice if you treat the invocations as unrelated.&lt;/p&gt;
+
+&lt;h2 id=&quot;breadth-first-search&quot;&gt;Breadth first search&lt;/h2&gt;
+
+&lt;p&gt;The combination of &lt;code&gt;iterate&lt;/code&gt; with our &lt;code&gt;step&lt;/code&gt; function produces a breadth-first search implementation.&lt;/p&gt;
+
+&lt;p&gt;The only non-obvious step is that the &lt;code&gt;edges&lt;/code&gt; stream needs to be brought in to the body of &lt;code&gt;iterate&lt;/code&gt;. This is not easy to do automatically (at least, not at the moment), and so we explicitly do this with the help of a stream that is inside the iterative context: &lt;code&gt;dists&lt;/code&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;c1&quot;&gt;// iteratively expand distances&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;roots&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;iterate&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;step&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dists&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;context&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;enter&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;In the fullness of time it may make sense for &lt;code&gt;iterate&lt;/code&gt; to take a function of two parameters, a stream like &lt;code&gt;dists&lt;/code&gt; and some sort of &lt;code&gt;context&lt;/code&gt; object that does the things we had to ask &lt;code&gt;dists&lt;/code&gt; to do for us.&lt;/p&gt;
+
+&lt;p&gt;That doesn’t really look all that complicated, does it? Now, we don’t yet know very much about what differential dataflow is doing under the covers, but that doesn’t have to stop us from grabbing the code and running it.&lt;/p&gt;
+
+&lt;h2 id=&quot;all-systems-go&quot;&gt;ALL SYSTEMS GO!!!&lt;/h2&gt;
+
+&lt;p&gt;I turned this on with 500M edges and 100M nodes, using nodes &lt;code&gt;0&lt;/code&gt;, &lt;code&gt;1&lt;/code&gt;, and &lt;code&gt;2&lt;/code&gt; as roots (so the distances are the distances from any of these three nodes). I then asked it to update (randomly re-wire) one edge per second, so that I could see how long updates take. If you do the same thing, you’ll see some output that looks like:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;520.00s: observed at (Root, 520): 2 changes; elapsed: 0.004067797010065988s
+522.00s: observed at (Root, 522): 2 changes; elapsed: 0.003325369005324319s
+524.00s: observed at (Root, 524): 2 changes; elapsed: 0.002495013002771884s
+526.00s: observed at (Root, 526): 2 changes; elapsed: 0.0021344090055208653s
+527.00s: observed at (Root, 527): 2 changes; elapsed: 0.00011885000276379287s
+532.00s: observed at (Root, 532): 2 changes; elapsed: 0.0019779420108534396s
+541.00s: observed at (Root, 541): 2 changes; elapsed: 0.0032094839989440516s
+545.00s: observed at (Root, 545): 3 changes; elapsed: 0.0020695959974545985s
+548.00s: observed at (Root, 548): 2 changes; elapsed: 0.0017733170097926632s
+553.00s: observed at (Root, 553): 2 changes; elapsed: 0.001985581999178976s
+577.00s: observed at (Root, 577): 1 changes; elapsed: 0.0019018270104425028s
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;This tells us a few things: first, it takes about 500s to get the computation up and running. That is &lt;em&gt;a lot&lt;/em&gt; of time to do BFS. We are spending time laying out the graph in a nice fashion, getting reading for incremental updates, all that stuff. I’m not going to try and defend this as good performance.&lt;/p&gt;
+
+&lt;p&gt;Did I mention this was single-threaded? It goes faster with more cores and computers. I’m pretty sure.&lt;/p&gt;
+
+&lt;p&gt;Once we start going we see that each incremental update (one random edge removal and addition) happens pretty quickly (the numbers over on the right). Most of these are single-digit milliseconds.&lt;/p&gt;
+
+&lt;p&gt;You might also notice that we miss some epochs; the node distances don’t always change, and in those cases we don’t print anything. They also go fast, but we don’t want to pat ourselves on the back just because the data didn’t change.&lt;/p&gt;
+
+&lt;h2 id=&quot;graph-connectivity&quot;&gt;Graph connectivity&lt;/h2&gt;
+
+&lt;p&gt;Way back when, someone said doing graph computation using &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt; was inefficient.&lt;/p&gt;
+
+&lt;p&gt;Let’s return to that, shall we?&lt;/p&gt;
+
+&lt;p&gt;Graph connectivity is usually done with an algorithm very similar to BFS. Rather than propagate a distance that we increase by one, we propagate a set of labels (the same set as the node identifiers), and each node keeps the smallest label it sees. The only difference from BFS is that we start each node with its own label, rather than a few roots with distance zero (and we don’t add one to anything).&lt;/p&gt;
+
+&lt;p&gt;It turns out that this algorithm is horrible. We should all stop using it. Even graph-processing experts.&lt;/p&gt;
+
+&lt;p&gt;The algorithm is dumb because we start circulating all labels, even very large labels that will eventually get dominated by smaller labels. This is a waste of everyone’s time.&lt;/p&gt;
+
+&lt;h3 id=&quot;improving-with-prioritization&quot;&gt;Improving with prioritization&lt;/h3&gt;
+
+&lt;p&gt;A better algorithm, from at least as far back as the &lt;a href=&quot;http://rio.ecs.umass.edu/mnilpub/papers/socc11-zhang.pdf&quot;&gt;PrIter&lt;/a&gt; paper, is to start circulating small labels first, and move on to larger labels only once nodes have gotten a chance to see if they should bother proposing their name as a label. If they see a better label in the meantime, they don’t.&lt;/p&gt;
+
+&lt;p&gt;You can do this in differential dataflow with a fancier version of &lt;code&gt;enter&lt;/code&gt;, that method that brought our set of edges in to the loop. We have an &lt;code&gt;enter_at&lt;/code&gt; method that lets you specify a function from record to iteration number, and the record first gets added to resulting collection at that iteration number. This lets us write clever things like:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;let nodes = inner.context().enter_at(&amp;amp;nodes,
+    |r| 256 * (64 - r.as_usize().leading_zeros() as u32));
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;What a mess. What this is saying is that we should introduce a record (here a node identifier) at an iteration equal to 256 times its base 2 logarithm. Why that number? It turns out it is a (provably) good trade-off between giving labels enough time to propagate and not using too many distinct batches. Each batch gets a 256 iteration head-start on the next batch, which grow in size geometrically.&lt;/p&gt;
+
+&lt;p&gt;This approach is a bit different from PrIter’s approach, which just says “start running and always use the smaller labels”. This works great in PrIter’s more ad-hoc setting, but we really need to be clear about which iteration is which for differential dataflow to work its magic.&lt;/p&gt;
+
+&lt;h3 id=&quot;running-things&quot;&gt;Running things&lt;/h3&gt;
+
+&lt;p&gt;Since graph connectivity is a bit different from BFS, in particular we have to symmetrize the graph before doing the propagation, we are going to use a different number of nodes and edges than above.
+I chose 20M nodes and 400M edges, generated randomly, because those numbers are pretty similar (in magnitude) to taking half of the vertices in the &lt;a href=&quot;http://an.kaist.ac.kr/traces/WWW2010.html&quot;&gt;twitter_rv&lt;/a&gt; dataset (about 42M nodes and 1.5B edges).&lt;/p&gt;
+
+&lt;p&gt;It takes about 800s to compute the connectivity information. This is &lt;a href=&quot;http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html&quot;&gt;slower than fancy graph processing systems&lt;/a&gt; on the &lt;code&gt;twitter_rv&lt;/code&gt; dataset, and we are only processing one fourth the data. The slowness can be partially explained by the fact that we are generating a bunch of random data, ingesting and sorting it, paging because reasons, and then doing graph connectivity using differential dataflow, which does math and stuff. Also, I just wrote this stuff last week and haven’t found a good profiler yet.&lt;/p&gt;
+
+&lt;p&gt;It is also worth pointing out that the 800s time is one thread, and the computation is inherently parallel.
+If I had a cluster I could tell you how well it parallelizes. Given that I don’t have a cluster (or a profiler) it might take a bit of love before it does, but &lt;a href=&quot;http://dl.acm.org/citation.cfm?id=2522738&quot;&gt;it has been done before&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Anyhow, it would be interesting to see if it has similar performance to the graph processing systems, because it can totally do some things they can’t even approach.&lt;/p&gt;
+
+&lt;h3 id=&quot;tell-us-what-can-it-do-frank&quot;&gt;Tell us what can it do, Frank!&lt;/h3&gt;
+
+&lt;p&gt;So we have our 400M edge graph, and we want to change it. Maybe someone tweetled an instachat.&lt;/p&gt;
+
+&lt;p&gt;We’ll do this two ways, to get a good latency measurement and then a good throughput measurement. Specifically, let’s try changing one edge at a time, and then let’s try changing 1,000 edges at a time.&lt;/p&gt;
+
+&lt;p&gt;We get the following cumulative density functions for the response time (from change introduced until confirmation that all output changes produced) for randomly tweaking one and one thousand edges, respectively:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://www.frankmcsherry.org/assets/latency.png&quot; alt=&quot;My helpful screenshot&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;To explain, if we do one update at a time we get a median response time of 130 microseconds. If we do 1,000 updates at a time we get a median response time of 33 milliseconds. At this rate we should be able to do 30,000 edge updates per second, observing the correct graph connectivity output with a faster refresh rate than your favorite feature films.&lt;/p&gt;
+
+&lt;p&gt;The elapsed running times for graph connectivity are within striking distance of purpose-built graph processors running on clusters (stay tuned!), and we get near real-time interactive updates too boot.&lt;/p&gt;
+
+&lt;p&gt;Hey, and we did this all with just &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt; (and &lt;code&gt;iterate&lt;/code&gt;, to be fair). Who likes apples?&lt;/p&gt;
+
+&lt;h2 id=&quot;up-next-under-the-covers&quot;&gt;Up next: Under the covers&lt;/h2&gt;
+
+&lt;p&gt;I’m going to try and explain differential dataflow again. It is pretty exhausting, but I think it is the sort of thing people need to understand if they want to work in the space of real-time graph analytics. I’ve got a bit of travel in the coming weeks, so in the meantime if you are keen you can totally &lt;a href=&quot;https://github.com/frankmcsherry/differential-dataflow&quot;&gt;check out the repo&lt;/a&gt; and lament the lack of intelligent comments and tests.&lt;/p&gt;
+
+&lt;p&gt;I’m hard at work tweaking the performance (mostly memory footprint) of differential dataflow. There are still a few cool things to do, and if you are interested in getting involved, let me know!&lt;/p&gt;
+</description>
+        <pubDate>Tue, 12 May 2015 17:20:00 +0200</pubDate>
+        <link>http://www.frankmcsherry.org/differential/dataflow/2015/05/12/bfs.html</link>
+        <guid isPermaLink="true">http://www.frankmcsherry.org/differential/dataflow/2015/05/12/bfs.html</guid>
+        
+        
+        <category>differential</category>
+        
+        <category>dataflow</category>
+        
+      </item>
     
       <item>
         <title>Abomonation: terrifying serialization</title>
@@ -2030,170 +2238,6 @@ Each scope has its own timestamp and path summary types, implementing the corres
         <pubDate>Tue, 16 Dec 2014 18:00:00 +0100</pubDate>
         <link>http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</link>
         <guid isPermaLink="true">http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</guid>
-        
-        
-        <category>columnarization</category>
-        
-        <category>serialization</category>
-        
-        <category>rust</category>
-        
-      </item>
-    
-      <item>
-        <title>Columnarization in Rust</title>
-        <description>&lt;p&gt;So like everyone without a job, I’ve started to learn &lt;a href=&quot;http://www.rust-lang.org&quot;&gt;Rust&lt;/a&gt;. And like everyone who has started to learn Rust, I now feel it is very important to tell you about my experience with it.&lt;/p&gt;
-
-&lt;p&gt;The project I’ll talk about is for &lt;strong&gt;columnarization&lt;/strong&gt;, a technique from the database community for laying out structured records in a format that is more convenient for serialization than the records themselves. This is important if you want to send data around in binary format at high throughputs, which is indeed something I often enjoy.&lt;/p&gt;
-
-&lt;p&gt;The rough idea is that, starting from a vector of some type, or &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; in Rust, we want to repeatedly reduce the complexity of the type &lt;code&gt;T&lt;/code&gt;, at the cost of increasing the number of vectors we have on hand. There are roughly three types of rules we’ll follow:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code&gt;Vec&amp;lt;uint&amp;gt;&lt;/code&gt; A vector of base types is our base case. Do nothing.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code&gt;Vec&amp;lt;(S, T)&amp;gt;&lt;/code&gt; A vector of pairs is transformed to a pair of vectors: &lt;code&gt;(Vec&amp;lt;S&amp;gt;, Vec&amp;lt;T&amp;gt;)&lt;/code&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code&gt;Vec&amp;lt;Vec&amp;lt;T&amp;gt;&amp;gt;&lt;/code&gt; A vector of vectors goes to a pair &lt;code&gt;(Vec&amp;lt;uint&amp;gt;, Vec&amp;lt;T&amp;gt;)&lt;/code&gt;, corresponding to the original vector lengths, and their concatenated payloads.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;These three rules, and generalizations thereof, allow us to transform vectors of fairly complex types into a sequence of vectors of simple types. These vectors of simple types are then very easy to serialize and deserialize, simply casting typed vectors to and from byte vectors.&lt;/p&gt;
-
-&lt;h2 id=&quot;implementation&quot;&gt;Implementation&lt;/h2&gt;
-
-&lt;p&gt;I’ve gone and tried this out in Rust. Naturally, I won’t share the first few evolutions with you, because you might conclude that neither Rust nor Frank is much of anything you’d want to be associated with. However, the current state of the project really appeals to me, and shows off some things I don’t think I could easily do in most other languages I am familiar with.&lt;/p&gt;
-
-&lt;p&gt;For the curious, the repository can be cloned from &lt;a href=&quot;https://github.com/frankmcsherry/columnar&quot;&gt;https://github.com/frankmcsherry/columnar&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The trait (“interface”) I’ve implemented is &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;, whose role in life is to &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; records, much like a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; in Rust. That is to say, it accepts records and adds them to its columnar stash, and it can return those records when asked. This isn’t yet much more interesting than &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;, so the &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt; also adds the ability to &lt;code&gt;encode&lt;/code&gt; its contents into byte arrays, and &lt;code&gt;decode&lt;/code&gt; from byte arrays populating its contents.&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;The intended use of a &lt;code&gt;ColumnarVec&lt;/code&gt; is to repeatedly call &lt;code&gt;push&lt;/code&gt; with your favorite records, decide that you’d like to &lt;code&gt;encode&lt;/code&gt; them to binary, ship the resulting arrays to a dear friend, who is then able to &lt;code&gt;decode&lt;/code&gt; into her empty &lt;code&gt;ColumnarVec&lt;/code&gt; and read the contents out using &lt;code&gt;pop&lt;/code&gt;.&lt;/p&gt;
-
-&lt;h3 id=&quot;uints-and-basic-types&quot;&gt;uints, and basic types&lt;/h3&gt;
-
-&lt;p&gt;For basic types, we have a very basic implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;: we just use a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;. When records are pushed or popped, we simply use the underlying methods on &lt;code&gt;Vec&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;To &lt;code&gt;encode&lt;/code&gt; we swap in an empty vector at &lt;code&gt;*self&lt;/code&gt; (using &lt;code&gt;mem::swap&lt;/code&gt;, which takes two mutable references), cast the swapped out vector to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;, and push it on to the &lt;code&gt;Vec&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt;&lt;/code&gt; stack.&lt;/p&gt;
-
-&lt;p&gt;To &lt;code&gt;decode&lt;/code&gt; we pop a byte vector from the stack, casting to a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt;, and then assign it to &lt;code&gt;*self&lt;/code&gt;. This overwrites anything currently in the &lt;code&gt;ColumnarVec&lt;/code&gt;, which … perhaps is not expected behavior.&lt;/p&gt;
-
-&lt;h3 id=&quot;pairs-tuples-and-structs&quot;&gt;Pairs, tuples, and structs&lt;/h3&gt;
-
-&lt;p&gt;Pairs are a bit more interesting than base types, in that we want to destructure the pair into its component elements so that they can each be pushed into their corresponding vectors. More generally, we will only assume that the two types in the pair have implementations of &lt;code&gt;ColumnarVec&lt;/code&gt; supporting them.&lt;/p&gt;
-
-&lt;p&gt;In Rust, as well as other sophisticated languages, we can indicate that any pair of types implementing &lt;code&gt;ColumnarVec&amp;lt;T1&amp;gt;&lt;/code&gt; and &lt;code&gt;ColumnarVec&amp;lt;T2&amp;gt;&lt;/code&gt; do themselves implement &lt;code&gt;ColumnarVec&amp;lt;(T1, T2)&amp;gt;&lt;/code&gt;. We simply name the types, state the constraints, and then provide the implementation:&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-      &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;// push into first ColumnarVec&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;// push into second ColumnarVec&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()))&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;One appealing part of Rust, and several other similar languages, is that one can specify an implementation in a fairly light-weight manner. Here, I’ve not even defined a new type to support the methods, I’ve just indicate that they exist for a family of pairs of two types.&lt;/p&gt;
-
-&lt;h3 id=&quot;vectors-and-collections&quot;&gt;Vectors and collections&lt;/h3&gt;
-
-&lt;p&gt;Vectors, and variable sized fields like &lt;code&gt;Option&amp;lt;T&amp;gt;&lt;/code&gt;, are where things start to get a bit sticky with columnarization. This is not only where we need to do some non-trivial re-shaping of the data, but also where we need to start dealing with dynamically allocated memory ourselves: people calling &lt;code&gt;pop&lt;/code&gt; are going to want to see some vectors in their results.&lt;/p&gt;
-
-&lt;p&gt;One of the very appealing parts of Rust is its notion of ownership of data, and this is indicated obliquely in the signature of the &lt;code&gt;push&lt;/code&gt; method. Whereas the &lt;code&gt;ColumnarVec&lt;/code&gt; itself is passed in as a reference (the &lt;code&gt;&amp;amp;mut self&lt;/code&gt; oddness), the record of type &lt;code&gt;T&lt;/code&gt; is unadorned, meaning it is the actual record and we own it now. Owning the record is great, because it means no one else owns it, and if we want to rip it in to small pieces in the name of columnarization, we are free to do so.&lt;/p&gt;
-
-&lt;p&gt;A second appealing part of owning the record is that it means we also own all of the dynamically allocated memory the record owns, for example any &lt;code&gt;Vec&lt;/code&gt; fields we might find. Obviously they hold valuable data we want to columnarize, but once that is done and the data are moved out, we can simply snag the &lt;code&gt;Vec&lt;/code&gt; and hold on to it for future use. Future use such as needing a &lt;code&gt;Vec&lt;/code&gt; when someone calls &lt;code&gt;pop&lt;/code&gt;. By stashing the vectors we can avoid much interaction with the allocator when repeatedly encoding and decoding, and that means performance.&lt;/p&gt;
-
-&lt;p&gt;Let’s look at the &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; methods for the implementation of &lt;code&gt;ColumnarVec&amp;lt;Vec&amp;lt;T&amp;gt;&amp;gt;&lt;/code&gt;. The first performs the possibly unsurprising tasks of pushing the input vector’s length into a &lt;code&gt;ColumnarVec&amp;lt;uint&amp;gt;&lt;/code&gt; and pushing its contents into a &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. Once done with the vector’s contents, it stashes the empty-but-allocated vector, which is the part that I thought was really clever. The &lt;code&gt;pop&lt;/code&gt; method runs in the opposite direction, fetching a stashed vector (or allocating if one doesn’t exist), reading the intended length, and then filling the vectors contents before returning the vector.&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-      &lt;span class=&quot;n&quot;&gt;R2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-        &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;       &lt;span class=&quot;c1&quot;&gt;// once empty, stash the vector&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;0.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-            &lt;span class=&quot;c1&quot;&gt;// fetch or allocate a vector, then fill and return.&lt;/span&gt;
-            &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap_or&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
-            &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;range&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;1.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-            &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-        &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;None&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;c1&quot;&gt;// ... encode and decode call the corresponding methods on R1 and R2 ...&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;This approach to vector columnarization steers us clear of the traditional hazards of memory allocation inside what is meant to be a tight loop. In applications where one is repeatedly encoding, exchanging, and decoding data, in steady state the program will not need to allocate any new memory, which is an excellent position to be in.&lt;/p&gt;
-
-&lt;h2 id=&quot;performance&quot;&gt;Performance&lt;/h2&gt;
-
-&lt;p&gt;Measuring the performance of columnarization in Rust turned out to be harder than I expected. Mostly, coming from a managed JIT background, one could reasonably believe that only effect of an optimizing compiler was to randomize line numbers. Rust and LLVM are a fair bit smarter and without the right test harness they wil just optimize away your program.&lt;/p&gt;
-
-&lt;p&gt;The harness is in &lt;a href=&quot;https://github.com/frankmcsherry/columnar/blob/master/examples/example.rs&quot;&gt;example.rs&lt;/a&gt;, and tests out columnar encoding and decoding of a few different datatypes. Be warned that these numbers are likely optimistic, as fewer optimizations will apply in the wild.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Serializing &lt;code&gt;uint&lt;/code&gt; data goes very fast, because it is just copying data and casting a pointer, if that.&lt;/p&gt;
-
-    &lt;p&gt;&lt;code&gt;Encoding/decoding at 11.24GB/s&lt;/code&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Serializing &lt;code&gt;(uint, (uint, uint))&lt;/code&gt; data goes less fast, but still quite fast:&lt;/p&gt;
-
-    &lt;p&gt;&lt;code&gt;Encoding/decoding at 5.29GB/s&lt;/code&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Serializing &lt;code&gt;Vec&amp;lt;Vec&amp;lt;uint&amp;gt;&amp;gt;&lt;/code&gt; data goes slower, due to conditional logic in the loop, but is still fast.&lt;/p&gt;
-
-    &lt;p&gt;&lt;code&gt;Encoding/decoding at 2.26GB/s&lt;/code&gt;&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;These throughputs numbers will obviously vary as the shape of the data change. Currently, working with &lt;code&gt;Option&amp;lt;T&amp;gt;&lt;/code&gt; types is slowest, due to the large ratio of conditional logic to actual bytes moved.&lt;/p&gt;
-
-&lt;p&gt;These are great numbers by my experience, and for about 150 lines of code all written in the base language (rather than code-gened nonsense), I am delighted.&lt;/p&gt;
-</description>
-        <pubDate>Mon, 15 Dec 2014 18:00:00 +0100</pubDate>
-        <link>http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/15/Columnarization-in-Rust.html</link>
-        <guid isPermaLink="true">http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/15/Columnarization-in-Rust.html</guid>
         
         
         <category>columnarization</category>

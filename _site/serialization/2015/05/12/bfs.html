@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+
+    <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>Differential graph computation</title>
+  <meta name="description" content="I recently received an email asking if differential dataflow might be a good fit for breadth-first search in evolving graphs. I think it is a great fit, and ...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/serialization/2015/05/12/bfs.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">Differential graph computation</h1>
+    <p class="post-meta">May 12, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p>I recently received an email asking if <a href="http://research.microsoft.com/apps/pubs/default.aspx?id=176693">differential dataflow</a> might be a good fit for <a href="http://en.wikipedia.org/wiki/Breadth-first_search">breadth-first search</a> in evolving graphs. I think it is a great fit, and I pushed a <a href="https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs">breadth-first search example</a> to the <a href="https://github.com/frankmcsherry/differential-dataflow">differential dataflow repository</a> in my delight and satisfaction.</p>
+
+<p>Around the same time I got a different email, asking if the recent <a href="https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-iyer.pdf">CellIQ paper</a> from NSDI, which does incremental connected components, is fundamentally new or might their “GStream” API be easily cast in something like <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a> or <a href="https://github.com/frankmcsherry/differential-dataflow">differential dataflow</a>.</p>
+
+<p>Now, I suspect this person was just a disgruntled trouble-maker. The GStream API (Listing 2) is clearly covered by differential dataflow, which allows arbitrary incremental updates to iterative computations containing operators like <code>join</code> and <code>group_by</code>, enough for many data-parallel graph computations. Whether it can be done is different from whether it can be done <em>well</em>, though.</p>
+
+<p>The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed <em>“using <code>join</code> and <code>group_by</code>, this can be very inefficient”</em>, because <em>“join operators are not optimized for graph processing and can be very expensive.”</em> They then cite some papers which, coincidentally, were try to sell you special-purpose graph processors.</p>
+
+<p>These authors are not wrong: it <em>can</em> be very inefficient and expensive, especially if you use a previous-generation platform not designed from the ground up to handle streaming iterative computation.</p>
+
+<p>Let’s see what happens if you build on something better, using just <code>join</code> and <code>group_by</code>, of course.</p>
+
+<h2 id="differential-dataflow">Differential dataflow</h2>
+
+<p>Differential dataflow is a way of implementing data-parallel dataflow computations so that work is done only in response to changes in the data. If you change one input to your computation, you would prefer not to re-evaluate the entire computation. Rather, changes to the input produces some changes in the output of your first dataflow operator, which are then changes to the inputs of subsequent operators. Eventually these changes either evaporate or spill out the end of your dataflow as changed outputs.</p>
+
+<p>Chasing these changes and doing <em>only</em> this work is what differential dataflow does well.</p>
+
+<p>Importantly—and as far as we are aware, uniquely—differential dataflow also maintains this property in the context of iterative dataflow computations.</p>
+
+<p>Going through the math for this usually results in long-lasting head-aches for the readers, so I’ll summarize instead. As changes flow around the dataflow, they “happen” at various logical times. These times reflect the epoch of streaming input data, and iteration counters for any loops they may be contained in. Rather than eagerly aggregate these changes, we leave them disaggregated, allowing future computation to use arbitrary subsets of the changes. Although we leave ourselves more work to do for each change, we end up with an orders-of-magnitude reduction in the numbers of changes.</p>
+
+<p>We might be getting ahead of ourselves with detail. Let’s step back and set some context.</p>
+
+<h2 id="data-parallel-dataflow">Data-parallel dataflow</h2>
+
+<p>The big-data-scenti have caught up with the idea that we should use high-level programming constructs to describe data-parallel computations. Two operators I’ll detail are <code>group_by</code> and <code>join</code>.</p>
+
+<p><strong>Warning</strong> : I’m going to over-simplify some of the operators in the coming sections. I recommend checking out <a href="https://github.com/frankmcsherry/differential-dataflow/tree/master/src/operators">the code</a> for the real details, some of which are smart and some of which are gross.</p>
+
+<h4 id="group-by">Group By</h4>
+
+<p>The <code>group_by</code> operator acts on a collection of records. I’ll imagine a type <code>Stream&lt;D&gt;</code> to indicate a not-yet-fully-formed data collection of records of type <code>D</code>. In this setting, <code>group_by</code> has the following sort of signature:</p>
+
+<pre><code>fn group_by&lt;K, V, F, R&gt;(inp: Stream&lt;(K,V)&gt;, red: F) -&gt; Stream&lt;R&gt;
+    where F: Fn(&amp;K, &amp;[V], &amp;mut Vec&lt;R&gt;);
+</code></pre>
+
+<p>For those of you familar with <code>map</code> and <code>reduce</code>, the <code>group_by</code> function is basically like <code>reduce</code>. The operator acts on a stream of key-value pairs, groups incoming pairs by their key value, and applies the reduction function <code>red</code> to each non-empty pair of key and matching records.</p>
+
+<p>They way I’ve done this, it gets a mutable vector of elements <code>R</code> and it is supposed to write into them. I’m open to other suggestions. It turns out that writing tasteful interfaces to performant code is hard.</p>
+
+<h4 id="join">Join</h4>
+
+<p>The second important (for this post) data-parallel operator is <code>join</code>, a binary operator matching pairs of input records with the same key.</p>
+
+<pre><code>fn join&lt;K, V1, V2&gt;(in1: Stream&lt;(K,V1)&gt;, in2: Stream&lt;(K,V2)&gt;) -&gt; Stream&lt;(K,V1,V2)&gt;;
+</code></pre>
+
+<p>The <code>join</code> operator is <em>bi-linear</em>, which means it has some nice mathematical properties (roughly: each input can be processed record-at-a-time, oblivious to other records from the same input).</p>
+
+<h4 id="other-operators">Other operators</h4>
+
+<p>So I lied. We are going to add some more simple operators such as <code>map</code>, <code>filter</code>, and <code>concat</code>. These operators do not involve any data movement or grouping, and can always be performed <em>in situ</em>. They are also <em>linear</em>, and consequently <a href="https://users.soe.ucsc.edu/~abadi/Papers/differential_revision-app.pdf">do not need any special differential dataflow implementation</a>.</p>
+
+<h2 id="prelude-bread-first-search">Prelude: Bread-first search</h2>
+
+<p>Let’s use what we have so far start to build up an example of breadth-first search.</p>
+
+<p>Our approach will be to maintain a stream <code>dists</code> of pairs <code>(node, dist)</code>, indicating that <code>node</code> can be reached using <code>dist</code> edges. From a supplied set of edges <code>edges</code>, we want to expand this set by one hop: each node provides the distance in which it can be reached to each of its neighbors, who then retain the smallest distance they’ve seen. I’m going to use <code>u32</code>s for node identifiers. Sorry.</p>
+
+<p>Our code follows this intuition, by using a <code>join</code> to provide the per-node information to neighbors. Under the covers, <code>join</code> maintains a list of key-value pairs as a trie: a flat list of keys, each with an offset into a flat list of values. Ignoring than the fact that these lists might change, this is the same as the <a href="http://en.wikipedia.org/wiki/Adjacency_list">adjacency list</a> representation of a graph.</p>
+
+<p>The output of <code>join</code> then needs to go through a <code>map</code> to increase the proposed distances by one.</p>
+
+<p>To the proposals produced by <code>join</code> we <code>concat</code> the original distances. You might want one of those.</p>
+
+<p>Finally, we use <code>group_by</code> to collect the distance proposals. Here I’m going to cheat and use the fact that my implementation of differential dataflow sorts records in each group (an important part of “consolidation”; details later). To find the least distance, we can just pop the first distance in the sorted order; we are guaranteed one exists, because we wouldn’t have been called if there was no data.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">step</span><span class="p">(</span><span class="n">dists</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Stream</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span>
+        <span class="n">edges</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">Stream</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">&gt;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">,</span> <span class="kt">u32</span><span class="p">)</span><span class="o">&gt;</span> <span class="p">{</span>
+
+    <span class="n">dists</span><span class="p">.</span><span class="n">join_u</span><span class="p">(</span><span class="o">&amp;</span><span class="n">edges</span><span class="p">)</span>
+         <span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">l</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span><span class="o">|</span> <span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">l</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+         <span class="p">.</span><span class="n">concat</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dists</span><span class="p">)</span>
+         <span class="p">.</span><span class="n">group_by_u</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">t</span><span class="o">|</span> <span class="n">t</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+ <span class="p">}</span></code></pre></div>
+
+<p>You might have noticed that <code>join_u</code> and <code>group_by_u</code> each have a <code>_u</code> suffix. Rust doesn’t think highly of operator overloading, and so you need to have distinct method names if you would like to have distinct implementations. In this case, we are using an implementation that knows we have unsigned integer keys, and can use a more efficient index (a <code>Vec</code> rather than a <code>HashMap</code>).</p>
+
+<h2 id="iterative-data-parallel-dataflow">Iterative data-parallel dataflow</h2>
+
+<p>We need one more operator. A different kind of operator. A <em>higher-order</em> operator: we need <code>iterate</code>.</p>
+
+<p>The <code>iterate</code> operator has a simple signature (these higher-order things always do, don’t they?)</p>
+
+<pre><code>fn iterate&lt;D, F: FnOnce(Stream&lt;D&gt;)-&gt;Stream&lt;D&gt;&gt;(s: Stream&lt;D&gt;, f: F) -&gt; Stream&lt;D&gt;;
+</code></pre>
+
+<p>The operator takes a stream, and a description of how to act on the stream. Its output is the result of acting on the input stream in the supplied manner a very large number of times.</p>
+
+<p>Of course, since <code>iterate</code> just takes a description of what to do repeatedly, it doesn’t define any data movement or new computation itself. In actual fact, we will need a few helpers behind the scenes to tell just when we can stop computing, but we don’t need to detail them to understand what <code>iterate</code> is supposed to produce.</p>
+
+<p>The <code>iterate</code> operator is <strong>incredibly important</strong> for efficient computation. It explains to your computer that you plan to do the same thing multiple times, and that it might be a good idea to spend a bit of effort to take advantage of that. Although you can do graph computation by repeatedly invoking <code>join</code> and <code>group_by</code>, you are doing your computer a disservice if you treat the invocations as unrelated.</p>
+
+<h2 id="breadth-first-search">Breadth first search</h2>
+
+<p>The combination of <code>iterate</code> with our <code>step</code> function produces a breadth-first search implementation.</p>
+
+<p>The only non-obvious step is that the <code>edges</code> stream needs to be brought in to the body of <code>iterate</code>. This is not easy to do automatically (at least, not at the moment), and so we explicitly do this with the help of a stream that is inside the iterative context: <code>dists</code>.</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">// iteratively expand distances</span>
+<span class="n">roots</span><span class="p">.</span><span class="n">iterate</span><span class="p">(</span><span class="o">|</span><span class="n">dists</span><span class="o">|</span> <span class="p">{</span>
+    <span class="n">step</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dists</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">dists</span><span class="p">.</span><span class="n">context</span><span class="p">().</span><span class="n">enter</span><span class="p">(</span><span class="o">&amp;</span><span class="n">edges</span><span class="p">))</span>
+<span class="p">}</span></code></pre></div>
+
+<p>In the fullness of time it may make sense for <code>iterate</code> to take a function of two parameters, a stream like <code>dists</code> and some sort of <code>context</code> object that does the things we had to ask <code>dists</code> to do for us.</p>
+
+<p>That doesn’t really look all that complicated, does it? Now, we don’t yet know very much about what differential dataflow is doing under the covers, but that doesn’t have to stop us from grabbing the code and running it.</p>
+
+<h2 id="all-systems-go">ALL SYSTEMS GO!!!</h2>
+
+<p>I turned this on with 500M edges and 100M nodes, using nodes <code>0</code>, <code>1</code>, and <code>2</code> as roots (so the distances are the distances from any of these three nodes). I then asked it to update (randomly re-wire) one edge per second, so that I could see how long updates take. If you do the same thing, you’ll see some output that looks like:</p>
+
+<pre><code>520.00s: observed at (Root, 520): 2 changes; elapsed: 0.004067797010065988s
+522.00s: observed at (Root, 522): 2 changes; elapsed: 0.003325369005324319s
+524.00s: observed at (Root, 524): 2 changes; elapsed: 0.002495013002771884s
+526.00s: observed at (Root, 526): 2 changes; elapsed: 0.0021344090055208653s
+527.00s: observed at (Root, 527): 2 changes; elapsed: 0.00011885000276379287s
+532.00s: observed at (Root, 532): 2 changes; elapsed: 0.0019779420108534396s
+541.00s: observed at (Root, 541): 2 changes; elapsed: 0.0032094839989440516s
+545.00s: observed at (Root, 545): 3 changes; elapsed: 0.0020695959974545985s
+548.00s: observed at (Root, 548): 2 changes; elapsed: 0.0017733170097926632s
+553.00s: observed at (Root, 553): 2 changes; elapsed: 0.001985581999178976s
+577.00s: observed at (Root, 577): 1 changes; elapsed: 0.0019018270104425028s
+</code></pre>
+
+<p>This tells us a few things: first, it takes about 500s to get the computation up and running. That is <em>a lot</em> of time to do BFS. We are spending time laying out the graph in a nice fashion, getting reading for incremental updates, all that stuff. I’m not going to try and defend this as good performance.</p>
+
+<p>Did I mention this was single-threaded? It goes faster with more cores and computers. I’m pretty sure.</p>
+
+<p>Once we start going we see that each incremental update (one random edge removal and addition) happens pretty quickly (the numbers over on the right). Most of these are single-digit milliseconds.</p>
+
+<p>You might also notice that we miss some epochs; the node distances don’t always change, and in those cases we don’t print anything. They also go fast, but we don’t want to pat ourselves on the back just because the data didn’t change.</p>
+
+<h2 id="graph-connectivity">Graph connectivity</h2>
+
+<p>Way back when, someone said doing graph computation using <code>join</code> and <code>group_by</code> was inefficient.</p>
+
+<p>Let’s return to that, shall we?</p>
+
+<p>Graph connectivity is usually done with an algorithm very similar to BFS. Rather than propagate a distance that we increase by one, we propagate a set of labels (the same set as the node identifiers), and each node keeps the smallest label it sees. The only difference from BFS is that we start each node with its own label, rather than a few roots with distance zero (and we don’t add one to anything).</p>
+
+<p>It turns out that this algorithm is horrible. We should all stop using it. Even graph-processing experts.</p>
+
+<p>The algorithm is dumb because we start circulating all labels, even very large labels that will eventually get dominated by smaller labels. This is a waste of everyone’s time.</p>
+
+<h3 id="improving-with-prioritization">Improving with prioritization</h3>
+
+<p>A better algorithm, from at least as far back as the <a href="http://rio.ecs.umass.edu/mnilpub/papers/socc11-zhang.pdf">PrIter</a> paper, is to start circulating small labels first, and move on to larger labels only once nodes have gotten a chance to see if they should bother proposing their name as a label. If they see a better label in the meantime, they don’t.</p>
+
+<p>You can do this in differential dataflow with a fancier version of <code>enter</code>, that method that brought our set of edges in to the loop. We have an <code>enter_at</code> method that lets you specify a function from record to iteration number, and the record first gets added to resulting collection at that iteration number. This lets us write clever things like:</p>
+
+<pre><code>let nodes = inner.context().enter_at(&amp;nodes,
+    |r| 256 * (64 - r.as_usize().leading_zeros() as u32));
+</code></pre>
+
+<p>What a mess. What this is saying is that we should introduce a record (here a node identifier) at an iteration equal to 256 times its base 2 logarithm. Why that number? It turns out it is a (provably) good trade-off between giving labels enough time to propagate and not using too many distinct batches. Each batch gets a 256 iteration head-start on the next batch, which grow in size geometrically.</p>
+
+<p>This approach is a bit different from PrIter’s approach, which just says “start running and always use the smaller labels”. This works great in PrIter’s more ad-hoc setting, but we really need to be clear about which iteration is which for differential dataflow to work its magic.</p>
+
+<h3 id="running-things">Running things</h3>
+
+<p>Since graph connectivity is a bit different from BFS, in particular we have to symmetrize the graph before doing the propagation, we are going to use a different number of nodes and edges than above.
+I chose 20M nodes and 400M edges, generated randomly, because those numbers are pretty similar (in magnitude) to taking half of the vertices in the <a href="http://an.kaist.ac.kr/traces/WWW2010.html">twitter_rv</a> dataset (about 42M nodes and 1.5B edges).</p>
+
+<p>It takes about 800s to compute the connectivity information. This is <a href="http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html">slower than fancy graph processing systems</a> on the <code>twitter_rv</code> dataset, and we are only processing one fourth the data. The slowness can be partially explained by the fact that we are generating a bunch of random data, ingesting and sorting it, paging because reasons, and then doing graph connectivity using differential dataflow, which does math and stuff. Also, I just wrote this stuff last week and haven’t found a good profiler yet.</p>
+
+<p>It is also worth pointing out that the 800s time is one thread, and the computation is inherently parallel.
+If I had a cluster I could tell you how well it parallelizes. Given that I don’t have a cluster (or a profiler) it might take a bit of love before it does, but <a href="http://dl.acm.org/citation.cfm?id=2522738">it has been done before</a>.</p>
+
+<p>Anyhow, it would be interesting to see if it has similar performance to the graph processing systems, because it can totally do some things they can’t even approach.</p>
+
+<h3 id="tell-us-what-can-it-do-frank">Tell us what can it do, Frank!</h3>
+
+<p>So we have our 400M edge graph, and we want to change it. Maybe someone tweetled an instachat.</p>
+
+<p>We’ll do this two ways, to get a good latency measurement and then a good throughput measurement. Specifically, let’s try changing one edge at a time, and then let’s try changing 1,000 edges at a time.</p>
+
+<p>We get the following cumulative density functions for the response time (from change introduced until confirmation that all output changes produced) for randomly tweaking one and one thousand edges, respectively:</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/latency.png" alt="My helpful screenshot" /></p>
+
+<p>To explain, if we do one update at a time we get a median response time of 130 microseconds. If we do 1,000 updates at a time we get a median response time of 33 milliseconds. At this rate we should be able to do 30,000 edge updates per second, observing the correct graph connectivity output with a faster refresh rate than your favorite feature films.</p>
+
+<p>The elapsed running times for graph connectivity are within striking distance of purpose-built graph processors running on clusters (stay tuned!), and we get near real-time interactive updates too boot.</p>
+
+<p>Hey, and we did this all with just <code>join</code> and <code>group_by</code> (and <code>iterate</code>, to be fair). Who likes apples?</p>
+
+<h2 id="up-next-under-the-covers">Up next: Under the covers</h2>
+
+<p>I’m going to try and explain differential dataflow again. It is pretty exhausting, but I think it is the sort of thing people need to understand if they want to work in the space of real-time graph analytics. I’ve got a bit of travel in the coming weeks, so in the meantime if you are keen you can totally <a href="https://github.com/frankmcsherry/differential-dataflow">check out the repo</a> and lament the lack of intelligent comments and tests.</p>
+
+<p>I’m hard at work tweaking the performance (mostly memory footprint) of differential dataflow. There are still a few cool things to do, and if you are interested in getting involved, let me know!</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+
+  </body>
+
+</html>
