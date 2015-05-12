@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 12 May 2015 15:27:45 +0200</pubDate>
-    <lastBuildDate>Tue, 12 May 2015 15:27:45 +0200</lastBuildDate>
+    <pubDate>Tue, 12 May 2015 15:35:34 +0200</pubDate>
+    <lastBuildDate>Tue, 12 May 2015 15:35:34 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -17,7 +17,7 @@
 
 &lt;p&gt;Now, I suspect this person was just a disgruntled trouble-maker. The GStream API (Listing 2) is clearly covered by differential dataflow, which allows arbitrary incremental updates to iterative computations containing operators like &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, enough for many data-parallel graph computations. Whether it can be done is different from whether it can be done &lt;em&gt;well&lt;/em&gt;, though.&lt;/p&gt;
 
-&lt;p&gt;The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed &lt;em&gt;“using &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, this can be very inefficient”&lt;/em&gt;, because &lt;em&gt;“join operators are not optimized for graph processing and can be very expensive.”&lt;/em&gt; They then cite some papers which, coincidentally, were try to sell you special-purpose graph processors.&lt;/p&gt;
+&lt;p&gt;The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed &lt;em&gt;“using &lt;code&gt;join&lt;/code&gt; and &lt;code&gt;group_by&lt;/code&gt;, this can be very inefficient”&lt;/em&gt;, because &lt;em&gt;“join operators are not optimized for graph processing and can be very expensive.”&lt;/em&gt; They then cite some papers which, perhaps coincidentally, try to sell you their special-purpose graph processors.&lt;/p&gt;
 
 &lt;p&gt;These authors are not wrong: it &lt;em&gt;can&lt;/em&gt; be very inefficient and expensive, especially if you use a previous-generation platform not designed from the ground up to handle streaming iterative computation.&lt;/p&gt;
 

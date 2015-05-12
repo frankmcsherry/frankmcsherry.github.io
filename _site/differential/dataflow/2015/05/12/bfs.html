@@ -70,7 +70,7 @@
 
 <p>Now, I suspect this person was just a disgruntled trouble-maker. The GStream API (Listing 2) is clearly covered by differential dataflow, which allows arbitrary incremental updates to iterative computations containing operators like <code>join</code> and <code>group_by</code>, enough for many data-parallel graph computations. Whether it can be done is different from whether it can be done <em>well</em>, though.</p>
 
-<p>The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed <em>“using <code>join</code> and <code>group_by</code>, this can be very inefficient”</em>, because <em>“join operators are not optimized for graph processing and can be very expensive.”</em> They then cite some papers which, coincidentally, were try to sell you special-purpose graph processors.</p>
+<p>The CellIQ paper is one step ahead of us, and observes that although graph computation can be expressed <em>“using <code>join</code> and <code>group_by</code>, this can be very inefficient”</em>, because <em>“join operators are not optimized for graph processing and can be very expensive.”</em> They then cite some papers which, perhaps coincidentally, try to sell you their special-purpose graph processors.</p>
 
 <p>These authors are not wrong: it <em>can</em> be very inefficient and expensive, especially if you use a previous-generation platform not designed from the ground up to handle streaming iterative computation.</p>
 
