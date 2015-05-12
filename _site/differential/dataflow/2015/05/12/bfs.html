@@ -78,7 +78,7 @@
 
 <h2 id="differential-dataflow">Differential dataflow</h2>
 
-<p>Differential dataflow is a way of implementing data-parallel dataflow computations so that work is done only in response to changes in the data. If you change one input to your computation, you would prefer not to re-evaluate the entire computation. Rather, changes to the input produces some changes in the output of your first dataflow operator, which are then changes to the inputs of subsequent operators. Eventually these changes either evaporate or spill out the end of your dataflow as changed outputs.</p>
+<p><a href="http://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf">Differential dataflow</a> is a way of implementing data-parallel dataflow computations so that work is done only in response to changes in the data. If you change one input to your computation, you would prefer not to re-evaluate the entire computation. Rather, changes to the input produces some changes in the output of your first dataflow operator, which are then changes to the inputs of subsequent operators. Eventually these changes either evaporate or spill out the end of your dataflow as changed outputs.</p>
 
 <p>Chasing these changes and doing <em>only</em> this work is what differential dataflow does well.</p>
 
