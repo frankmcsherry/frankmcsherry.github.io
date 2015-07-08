@@ -5,13 +5,15 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 08 Jul 2015 14:35:14 +0200</pubDate>
-    <lastBuildDate>Wed, 08 Jul 2015 14:35:14 +0200</lastBuildDate>
+    <pubDate>Wed, 08 Jul 2015 17:55:18 +0200</pubDate>
+    <lastBuildDate>Wed, 08 Jul 2015 17:55:18 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
-        <title>The impact of fast networks on graph analytics</title>
-        <description>&lt;p&gt;&lt;strong&gt;&lt;em&gt;tl;dr:&lt;/em&gt; A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.&lt;/strong&gt;&lt;/p&gt;
+        <title>The impact of fast networks on graph analytics, part 1</title>
+        <description>&lt;p&gt;This is a joint post with &lt;a href=&quot;http://www.cl.cam.ac.uk/~ms705/&quot;&gt;Malte Schwarzkopf&lt;/a&gt;, cross-blogged here and at &lt;a href=&quot;http://www.cl.cam.ac.uk/research/srg/netos/camsas/blog/2015-07-08-timely-pagerank-part1.html&quot;&gt;the CamSaS blog&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;&lt;em&gt;tl;dr:&lt;/em&gt; A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.&lt;/strong&gt;&lt;/p&gt;
 
 &lt;p&gt;I spent the past few weeks visiting the &lt;a href=&quot;http://camsas.org&quot;&gt;CamSaS folks&lt;/a&gt; at the &lt;a href=&quot;http://www.cl.cam.ac.uk&quot;&gt;University of Cambridge Computer Lab&lt;/a&gt;. Together, we did some interesting work, which we – &lt;a href=&quot;http://www.cl.cam.ac.uk/~ms705/&quot;&gt;Malte Schwarzkopf&lt;/a&gt; and I – are now going to tell you about.&lt;/p&gt;
 

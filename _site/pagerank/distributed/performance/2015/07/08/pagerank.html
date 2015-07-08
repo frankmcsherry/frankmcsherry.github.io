@@ -8,8 +8,8 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width initial-scale=1">
 
-  <title>The impact of fast networks on graph analytics</title>
-  <meta name="description" content="tl;dr: A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely ju...">
+  <title>The impact of fast networks on graph analytics, part 1</title>
+  <meta name="description" content="This is a joint post with Malte Schwarzkopf, cross-blogged here and at the CamSaS blog.">
 
   <link rel="stylesheet" href="/css/main.css">
   <link rel="canonical" href="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html">
@@ -59,12 +59,14 @@
         <div class="post">
 
   <header class="post-header">
-    <h1 class="post-title">The impact of fast networks on graph analytics</h1>
+    <h1 class="post-title">The impact of fast networks on graph analytics, part 1</h1>
     <p class="post-meta">Jul 8, 2015</p>
   </header>
 
   <article class="post-content">
-    <p><strong><em>tl;dr:</em> A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.</strong></p>
+    <p>This is a joint post with <a href="http://www.cl.cam.ac.uk/~ms705/">Malte Schwarzkopf</a>, cross-blogged here and at <a href="http://www.cl.cam.ac.uk/research/srg/netos/camsas/blog/2015-07-08-timely-pagerank-part1.html">the CamSaS blog</a>.</p>
+
+<p><strong><em>tl;dr:</em> A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.</strong></p>
 
 <p>I spent the past few weeks visiting the <a href="http://camsas.org">CamSaS folks</a> at the <a href="http://www.cl.cam.ac.uk">University of Cambridge Computer Lab</a>. Together, we did some interesting work, which we – <a href="http://www.cl.cam.ac.uk/~ms705/">Malte Schwarzkopf</a> and I – are now going to tell you about.</p>
 
