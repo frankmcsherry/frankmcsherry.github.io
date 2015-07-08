@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html>
+
+    <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>The impact of fast networks on graph analytics</title>
+  <meta name="description" content="tl;dr: A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely ju...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">The impact of fast networks on graph analytics</h1>
+    <p class="post-meta">Jul 8, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p><strong><em>tl;dr:</em> A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.</strong></p>
+
+<p>I spent the past few weeks visiting the <a href="http://camsas.org">CamSaS folks</a> at the <a href="http://www.cl.cam.ac.uk">University of Cambridge Computer Lab</a>. Together, we did some interesting work, which we – <a href="http://www.cl.cam.ac.uk/~ms705/">Malte Schwarzkopf</a> and I – are now going to tell you about.</p>
+
+<p>Recently, a paper entitled “<a href="https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-ousterhout.pdf">Making Sense of Performance in Data Analytics Frameworks</a>” appeared at <a href="https://www.usenix.org/conference/nsdi15/">NSDI 2015</a>. This paper contains some surprising results: in particular, it argues that data analytics stacks are limited more by CPU than they are by network or disk IO. Specifically,</p>
+
+<blockquote>
+  <p><em>“Network optimizations can only reduce job completion time by a median of at most 2%. The network is not a bottleneck because much less data is sent over the network than is transferred to and from disk. As a result, network I/O is mostly irrelevant to overall performance, even on 1Gbps networks.”</em> (§1)</p>
+</blockquote>
+
+<p>The measurements were done using Spark, but the authors argue that they generalize to other systems. We thought that this was surprising, as it doesn’t match our experience with other data processing systems. In this blog post, we will look into whether these observations do indeed generalize.</p>
+
+<p>One of the three workloads in the paper is the <a href="https://amplab.cs.berkeley.edu/benchmark/">BDBench query set</a> from Berkeley, which includes a “page-rank-like computation”. Moreover, PageRank also appears as an extra example in the <a href="http://www.eecs.berkeley.edu/~keo/talks/2015_05_05_NSDI_MakingSense.pdf">NSDI slide deck</a> (slide 38-39), used there to illustrate that at most a 10% improvement in job completion time can be had even for a network-intensive workload.</p>
+
+<p>This was especially surprising to us because of the recent discussion around whether graph computations require distributed data processing systems at all. Several distributed systems <a href="https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry">get beat by a simple, single-threaded implementation</a> on a laptop for various graph computations. The common interpretation is that graph computations are communication-limited; the network gets in the way, and you are better off with one machine if the computation fits.<sup><a name="fn0l" href="#fn0">0</a></sup></p>
+
+<p>These two positions – <em>(i)</em> “PageRank cannot be improved by more than 10% via a faster network”, and <em>(ii)</em> “graph computations such as PageRank are communication-bound, and benefit from very fast local communication” – didn’t jive with each other, and raised a bunch of questions: are these computations CPU-bound, or communication-bound, or is it perhaps more complicated than that? And shouldn’t it still be possible to make multiple computers connected by a decent network go faster than one computer?</p>
+
+<p>We are going to look in to the performance of distributed PageRank using both GraphX (a graph processing framework on top of Spark) and <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a>, on a cluster with both 1G and 10G network interfaces.</p>
+
+<blockquote>
+  <p><strong>tl;dr #1</strong>: Network speed may not matter with a Spark-based stack, but it <em>does</em> matter to higher-performance analytics stacks, and for graph processing especially. By moving from a 1G to a 10G network, we see a 2-3x improvement in performance for timely dataflow.</p>
+</blockquote>
+
+<blockquote>
+  <p><strong>tl;dr #2</strong>: A well-balanced distributed system offers performance improvements even for graph processing problems that fit into a single machine; running things locally isn’t always the best strategy.</p>
+</blockquote>
+
+<blockquote>
+  <p><strong>tl;dr #3</strong>: PageRank performance on GraphX is primarily <em>system</em>-bound. We see a 4x-20x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.</p>
+</blockquote>
+
+<p>Obviously, take all these conclusions with a grain of salt: we will discuss some caveats and design decisions that some may disagree with. However, our code is <a href="http://github.com/frankmcsherry/pagerank">available</a> alongside <a href="http://github.com/frankmcsherry/pagerank/README.md">instructions</a>, so you may try it for yourself!</p>
+
+<h2 id="overview">Overview</h2>
+
+<p>We set out to understand the bottlenecks in a non-trivial computation that we understand pretty well: PageRank. To be clear, PageRank is not some brilliant computation, but it is more interesting than a distributed <code>grep</code>. It is a good example of computations that exchange data, aggregate data, and benefit from maintaining indexed data resident in memory. It can also be implemented in different ways, and thus helps tease out how well (or badly) a particular approach fits with a particular system.</p>
+
+<p>This was also a good opportunity to try out <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow in Rust</a>, which is both a port to <a href="http://www.rust-lang.org">Rust</a> and an extension of the timely dataflow paradigm in <a href="http://research.microsoft.com/Naiad">Naiad</a>. Timely dataflow in Rust had only been run on a laptop so far, so this was a good chance to shake some bugs out.</p>
+
+<p>Additionally, the Cambridge Computer Lab has a new “model data centre”, which is a modern cluster equipped with 10G networking kit, and we wanted to see how fast this Rust code can go. As it turns out, it now moves pretty briskly. You’ll see.</p>
+
+<h2 id="pagerank">PageRank</h2>
+
+<p>PageRank is a not-wildly-complicated graph computation: the idea is that each vertex starts with some amount of real-valued “rank”, which it repeatedly shares along the directed edges to its neighbors. If one keeps doing this for long enough, the real-valued ranks start to stabilize.</p>
+
+<p>Here is a straightforward, serial PageRank implementation in Rust:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="k">fn</span> <span class="n">pagerank</span><span class="o">&lt;</span><span class="n">G</span><span class="o">&gt;</span><span class="p">(</span><span class="n">graph</span><span class="o">:</span> <span class="o">&amp;</span><span class="n">G</span><span class="o">:</span> <span class="n">Graph</span><span class="p">,</span> <span class="n">vertices</span><span class="o">:</span> <span class="n">usize</span><span class="p">,</span> <span class="n">alpha</span><span class="o">:</span> <span class="kt">f32</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="c1">// mutable per-vertex state</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">src</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="mi">0</span><span class="k">f32</span><span class="p">;</span> <span class="n">vertices</span><span class="p">];</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">dst</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="mi">0</span><span class="k">f32</span><span class="p">;</span> <span class="n">vertices</span><span class="p">];</span>
+    <span class="kd">let</span> <span class="k">mut</span> <span class="n">deg</span> <span class="o">=</span> <span class="n">vec</span><span class="o">!</span><span class="p">[</span><span class="mi">0</span><span class="k">f32</span><span class="p">;</span> <span class="n">vertices</span><span class="p">];</span>
+
+    <span class="c1">// determine vertex degrees</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="n">_</span><span class="p">)</span> <span class="k">in</span> <span class="n">graph</span><span class="p">.</span><span class="n">edges</span><span class="p">()</span> <span class="p">{</span> <span class="n">deg</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span><span class="k">f32</span><span class="p">;</span> <span class="p">}</span>
+
+    <span class="c1">// perform 20 iterations</span>
+    <span class="k">for</span> <span class="n">_iteration</span> <span class="k">in</span> <span class="p">(</span><span class="mi">0</span> <span class="p">..</span> <span class="mi">20</span><span class="p">)</span> <span class="p">{</span>
+
+        <span class="c1">// prepare src ranks</span>
+        <span class="k">for</span> <span class="n">vertex</span> <span class="k">in</span> <span class="p">(</span><span class="mi">0</span> <span class="p">..</span> <span class="n">vertices</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">src</span><span class="p">[</span><span class="n">vertex</span><span class="p">]</span> <span class="o">=</span> <span class="n">alpha</span> <span class="o">*</span> <span class="n">dst</span><span class="p">[</span><span class="n">vertex</span><span class="p">]</span> <span class="o">/</span> <span class="n">deg</span><span class="p">[</span><span class="n">vertex</span><span class="p">];</span>
+            <span class="n">dst</span><span class="p">[</span><span class="n">vertex</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="k">f32</span> <span class="o">-</span> <span class="n">alpha</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="c1">// do the expensive part</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="n">y</span><span class="p">)</span> <span class="k">in</span> <span class="n">graph</span><span class="p">.</span><span class="n">edges</span><span class="p">()</span> <span class="p">{</span> <span class="n">dst</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">+=</span> <span class="n">src</span><span class="p">[</span><span class="n">x</span><span class="p">];</span> <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>If we look at the code, the computation manipulates per-vertex state (preparing <code>src[vertex]</code> and <code>dst[vertex]</code>, using <code>deg[vertex]</code>), and then swings through <code>graph</code>, increasing <code>dst[y]</code> by <code>src[x]</code> for each graph edge <code>(x,y)</code>.</p>
+
+<p>The only part of this computation that makes parallelization difficult is updating <code>dst[y]</code>: because the edges may link any pairs of vertices, we don’t have an <em>a priori</em> partitioning of responsibility for these updates. So we’ll have to do that.</p>
+
+<h2 id="a-distributed-pagerank">A Distributed PageRank</h2>
+
+<p>We want to map this computation across multiple workers (threads, processes, or computers), and fortunately there are several fairly simple ways to do this. The most common approach is to partition responsibility for each <code>vertex</code> across the workers, so that each worker is responsible for a roughly equal number of vertices.<sup><a name="fn1l" href="#fn1">1</a></sup> We will assign the responsibility for processing vertex <code>v</code> to worker <code>v % workers</code>.</p>
+
+<p>To partition the computation among workers, we also need to partition the relevant state (inputs and intermediate data) as well. The input to the computation is just a set of edges, so we must make sure that edge <code>(x, y)</code> makes its way to worker <code>x % workers</code>.</p>
+
+<p>Once we have distributed all the edges to the workers, the PageRank computation is just a matter of repeatedly applying the per-vertex updates, which each worker can do independently, and then determining and communicating the updates to the ranks of <em>other</em> vertices.</p>
+
+<p>Each worker prepares a message of the form <code>(y, src[x])</code>, indicating the intended update, rather than directly applying <code>+=</code> to the ranks. These updates are then exchanged between the workers, i.e., updates to a vertex <code>y</code> are sent to worker <code>y % workers</code>.</p>
+
+<h3 id="implementation-1-send-everything">Implementation #1: Send everything</h3>
+
+<p>This will be our first implementation, which we will quickly discard as being hilariously inefficient. For every edge <code>(x, y)</code> at a vertex, we prepare a message <code>(y, rank)</code> indicating interest in performing a <code>+=</code> operation for the edge destination <code>y</code>. We exchange all of these messages, sending each to the worker in charge of the recipient vertex.</p>
+
+<p>The figure below illustrates how this would proceed in a setting with four workers (<em>w<sub>0</sub></em> to <em>w<sub>3</sub></em>) in two processes (<strong>P<sub>0</sub></strong> and <strong>P<sub>1</sub></strong>).</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/pr-naive.png" alt="Na&iuml;ve no-aggregation implementation of distributed PageRank." /></p>
+
+<p>However, this approach needs to send some data across the network <em>for every edge in the graph</em>. That would certainly result in some serious communication,<sup><a name="fn2l" href="#fn2">2</a></sup> and 10G would look pretty good compared to 1G. However, we would only be able to conclude that a fairly naïve implementation is communication-bound. Let’s see if we can do better.</p>
+
+<h3 id="implementation-2-worker-level-aggregation">Implementation #2: Worker-level aggregation</h3>
+
+<p>Recall that each worker manages multiple vertices. Their edges may well have destinations in common, so each worker can accumulate the messages for each destination, and send just one message for each distinct destination. The worker can accumulate these updates into a hash table, or a large sparse vector (proportional to the number of vertices in the entire graph), but there is a much simpler way.</p>
+
+<p>Each worker groups its edges by <em>destination</em>, rather than by source. By so doing, a worker can iterate through its destinations, accumulate its updates from each source rank, and then issue one update for the destination.</p>
+
+<p>The single-threaded interpretation of this code might look like this:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">// replaces &quot;for (x, y) in graph.edges() { dst[y] += src[x]; }&quot;</span>
+<span class="k">for</span> <span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">xs</span><span class="p">)</span> <span class="k">in</span> <span class="n">graph_transpose</span><span class="p">.</span><span class="n">edges</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">dst</span><span class="p">[</span><span class="n">y</span><span class="p">]</span> <span class="o">+=</span> <span class="n">xs</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">x</span><span class="o">|</span> <span class="n">src</span><span class="p">[</span><span class="n">x</span><span class="p">]).</span><span class="n">sum</span><span class="p">();</span>
+<span class="p">}</span></code></pre></div>
+
+<p>Because each worker only has edges from vertices <code>x</code> equal modulo <code>workers</code>, each value of <code>x / workers</code> is distinct. We can compact <code>src</code> by a factor of <code>workers</code>, accessing <code>src[x / workers]</code> instead of <code>src[x]</code>. Compared to the source-grouped approach, the code does random access into a small vector <code>src</code> rather than a large vector <code>dst</code>, which benefits locality.</p>
+
+<p>The figure below illustrates this: each worker merges updates for the same destination (bold number) into a single update. As a result, this example four-worker setup ends up exchanging only 12 messages, instead of 16 in the naïve version.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/pr-worker-agg.png" alt="Worker-level aggregation implementation of distributed PageRank." /></p>
+
+<p>Moreover, this approach also produces outputs as it goes, which allows workers to overlap communication with communication: a worker can start telling other workers about its updates right away, using the network at the same time as the rest of the computer.</p>
+
+<h3 id="implementation-3-process-level-aggregation">Implementation #3: Process-level aggregation</h3>
+
+<p>The worker-level aggregation implementation (#2, above) is our best-performing implementation for a 10G network, but it still sends quite a bit of data.<sup><a name="fn3l" href="#fn3">3</a></sup> To more fairly compare 1G and 10G networks, we can aggregate a bit more aggressively and move aggregation to the <em>process level</em> to further reduce the amount of data transmitted. This, however, comes at the expense of more computation and more synchronization, since process-level aggregates across multiple workers must await all data from each worker. This reduces the overlapping of computation and communication that we can do, but we send less data overall.</p>
+
+<p>Again, the figure illustrates this: after we have aggregated updates at the worker level, we also aggregate them at the process level. In the example, this reduces the number of messages from 12 to 9.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/pr-process-agg.png" alt="Process-level aggregationo implementation of distributed PageRank." /></p>
+
+<p>We could potentially try and make this implementation even smarter, cutting computation and overlapping communication. However, as we will show in part two of our investigation, we cannot expect a 1G network to win out over 10G even with infinitely fast aggregation.</p>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<p>Let’s see how well our implementations work!</p>
+
+<p>We evaluate the time to do twenty iterations of PageRank on the CamSaS cluster,<sup><a name="fn4l" href="#fn4">4</a></sup> using Spark/GraphX 1.4 and our timely dataflow implementation.</p>
+
+<p>We use two graphs, those used by <a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf">the GraphX paper</a>: a 1.4B edge <a href="http://an.kaist.ac.kr/traces/WWW2010.html">graph of Twitter followers</a> (<code>twitter_rv</code>), and a 3.7B edge <a href="http://law.di.unimi.it/webdata/uk-2007-05/">graph of web links</a> (<code>uk_2007_05</code>). The <code>uk_2007_05</code> graph is also the one used for the results <a href="https://twitter.com/kayousterhout/status/596034007063638016">shown in the NSDI slide deck</a>.</p>
+
+<h3 id="some-baseline-measurements">Some baseline measurements</h3>
+
+<p>Before we start, let’s think about existing baselines that should give some context.</p>
+
+<p>Below, we show previously reported measurements from Spark and GraphX, as well as the runtime of GraphX on our cluster, and the runtime of two single-threaded implementations (from <a href="https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry">the COST paper</a>).</p>
+
+<p align="center">
+<img src="http://www.frankmcsherry.org/plots/pr-baselines.png" />
+</p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>source</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Spark</td> <td><a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf">GraphX paper</a></td> <td align="right">16x8</td> <td align="right">857s</td> <td align="right">1759s</td></tr>
+<tr> <td>GraphX</td> <td><a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf">GraphX paper</a></td> <td align="right">16x8</td> <td align="right">419s</td> <td align="right">462s</td></tr>
+<tr> <td>GraphX</td> <td>measured on our cluster</td> <td align="right">16x8</td> <td align="right">334s</td> <td align="right">362s</td></tr>
+<tr> <td>Single thread (simpler)</td> <td><a href="https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry">COST paper</a></td> <td align="right">1</td> <td align="right">300s</td><td align="right">651s</td> </tr>
+<tr> <td>Single thread (smarter)</td> <td><a href="https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry">COST paper</a></td> <td align="right">1</td> <td align="right">110s</td><td align="right">256s</td> </tr>
+<caption>Twenty pagerank iterations, baseline measurements.</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>So far, nothing new: the measurement on our cluster confirms that the numbers from the GraphX paper can be reproduced,<sup><a name="fn5l" href="#fn5">5</a></sup>. Moreover, the laptop performs pretty well even though it’s using only one CPU core, rather than 128. On the <code>twitter_rv</code> graph, the single-threaded implementation <em>always</em> beats the distributed implementations, and on the <code>uk_2007_05</code> graph, the simple single-threaded implementation is only ~50% slower than GraphX (at 128x less resources!). The smarter single-threaded implementation with a Hilbert space-filling curve graph layout always beats the distributed systems by between 30% and 3x.</p>
+
+<p>Is that bad news for distributed graph processing generally? Let’s see.</p>
+
+<h3 id="a-timely-dataflow-implementation">A timely dataflow implementation</h3>
+
+<p>Let’s take our data-parallel implementation out for a spin. We’ll start with just a single machine, and move from one core to multiple cores. We measure the total elapsed time (first graph), and the average per-iteration time of the last ten iterations (second graph). For reference, we also show the results for GraphX, and the simple single-threaded implementations (as horizontal bars).</p>
+
+<p align="center">
+<img src="http://www.frankmcsherry.org/plots/pr-multithreaded.png" />
+</p>
+
+<p align="center">
+<img src="http://www.frankmcsherry.org/plots/pr-multithreaded-periter.png" />
+</p>
+
+<!-- ![End-to-end runtimes for multi-threaded timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-multithreaded.png)
+![Per-iteration runtimes for multi-threaded timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-multithreaded-periter.png) -->
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th> <th>cores</th> <th>twitter_rv</th> <th>uk_2007_05</th></tr>
+<tr> <td>Timely dataflow</td> <td align="right">1</td> <td align="right">350.7s (11.33s)</td> <td align="right">442.2s (8.90s)</td></tr>
+<tr> <td>Timely dataflow</td> <td align="right">2</td> <td align="right">196.5s (6.39s)</td> <td align="right">297.3s (5.67s)</td></tr>
+<tr> <td>Timely dataflow</td> <td align="right">4</td> <td align="right">182.4s (6.12s)</td><td align="right">192.0s (3.78s)</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">8</td> <td align="right">107.6s (3.70s)</td><td align="right">137.1s (3.29s)</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">12</td> <td align="right">95.0s (3.32s)</td><td align="right">114.5s (2.65s)</td> </tr>
+<caption>Twenty pagerank iterations on one machine, multiple threads.</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>Well, this is good: with one thread, we still perform similarly as GraphX at 128, and we outperform the simple single-threaded measurement with just two threads<sup><a name="fn6l" href="#fn6">6</a></sup>, and we outperform the smart single-threaded measurement with eight threads.<sup><a name="fn7l" href="#fn7">7</a></sup></p>
+
+<p>This suggests that parallelism inside a single machine, at least, helps make this computation go faster. Maybe multiple computers, with all that networking in between, end up being slower though?</p>
+
+<h3 id="multiple-computers-1g-vs-10g">Multiple computers: 1G vs. 10G</h3>
+
+<p>Let’s now see what happens when we distribute the computation over multiple computers. Here we have the choice of using either a 1G network interface or a 10G network interface; we will measure both, revealing the performance gains that 10G brings (if any).</p>
+
+<p>In addition to the worker-level aggregation implementation from above, we also include measurements for process-level aggregation on a 1G network (labelled “1G+”). This is more representative of a 1G-optimized implementation, and matches what GraphX does.</p>
+
+<p>For each configuration, we again report the elapsed time to perform twenty iterations (first graph), and the average of the final ten iterations (second graph). Because GraphX and our implementation have different one-off start-up costs, the average iteration time when the computation is running is probably the fairest metric for comparison.</p>
+
+<p align="center">
+<img src="http://www.frankmcsherry.org/plots/pr-distributed.png" />
+</p>
+
+<p align="center">
+<img src="http://www.frankmcsherry.org/plots/pr-distributed-periter.png" />
+</p>
+
+<!-- ![End-to-end runtimes for distributed timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-distributed.png)
+![Per-iteration runtimes for distributed timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-distributed-periter.png) -->
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th>
+<th>cores</th>
+<th>1G</th>
+<th>1G+</th>
+<th>10G</th>
+<th colspan="2">10G speedup over 1G+</th>
+</tr>
+<tr> <th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th>total</th>
+<th>per-iteration</th> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">1x8</td>
+<td align="right">107.6s (3.70s)</td>
+<td align="right">107.6s (3.70s)</td>
+<td align="right">107.6s (3.70s)</td>
+<td align="right">&ndash;</td>
+<td align="right">&ndash;</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">2x8</td>
+<td align="right">115.2s (4.66s)</td>
+<td align="right">89.0s (3.51s)</td>
+<td align="right">65.6s (2.34s)</td>
+<td align="right" style="font-weight: bold;">1.36x</td>
+<td align="right" style="font-weight: bold;">1.50x</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">4x8</td>
+<td align="right">149.4s (6.77s)</td>
+<td align="right">80.9s (3.33s)</td>
+<td align="right">40.6s (1.49s)</td>
+<td align="right" style="font-weight: bold;">1.99x</td>
+<td align="right" style="font-weight: bold;">2.23x</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">8x8</td>
+<td align="right">145.4s (6.60s)</td>
+<td align="right">66.5s (2.86s)</td>
+<td align="right">27.6s (1.05s)</td>
+<td align="right" style="font-weight: bold;">2.41x</td>
+<td align="right" style="font-weight: bold;">2.72x</td> </tr>
+<tr> <td>Timely dataflow</td> <td align="right">16x8</td> <td align="right">169.3s (7.51s)</td>
+<td align="right">51.8s (2.30s)</td>
+<td align="right">19.3s (0.75s)</td>
+<td align="right" style="font-weight: bold;">2.68x</td>
+<td align="right" style="font-weight: bold;">3.07x</td> </tr>
+<tr> <td>GraphX</td>
+<td align="right">16x8</td> <td></td>
+<td align="right">354.8s (13.4s)</td>
+<td align="right">333.7s (12.2s)</td>
+<td align="right" style="font-weight: bold;">1.06x</td>
+<td align="right" style="font-weight: bold;">1.10x</td> </tr>
+<caption>Elapsed and (per-iteration) times for twenty PageRank iterations on multiple machines using the <code>twitter_rv graph</code>, comparing 1G and 10G networks</caption>
+</table>
+</center>
+
+<p></p>
+
+<center>
+<table border="1" style="width:75%">
+<tr> <th>System</th>
+<th>cores</th>
+<th>1G</th>
+<th>1G+</th>
+<th>10G</th>
+<th colspan="2">10G speedup over 1G+</th>
+</tr>
+<tr> <th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th>total</th>
+<th>per-iteration</th> </tr>
+<tr> <td>Timely dataflow</td>
+<td align="right">1x8</td>
+<td align="right">137.1s (3.29s)</td>
+<td align="right">137.1s (3.29s)</td>
+<td align="right">137.1s (3.29s)</td>
+<td align="right">&ndash;</td>
+<td align="right">&ndash;</td> </tr>
+<tr> <td>Timely dataflow</td>
+<td align="right">2x8</td>
+<td align="right">173.3s (6.82s)</td>
+<td align="right">135.8s (4.82s)</td>
+<td align="right">80.7s (2.31s)</td>
+<td align="right" style="font-weight: bold;">1.68x</td>
+<td align="right" style="font-weight: bold;">2.09x</td></tr>
+<tr> <td>Timely dataflow</td>
+<td align="right">4x8</td>
+<td align="right">231.9s (9.06s)</td>
+<td align="right">119.1s (4.67s)</td>
+<td align="right">51.4s (1.54s)</td>
+<td align="right" style="font-weight: bold;">2.32x</td>
+<td align="right" style="font-weight: bold;">3.03x</td></tr>
+<tr> <td>Timely dataflow</td>
+<td align="right">8x8</td>
+<td align="right">196.4s (8.87s)</td>
+<td align="right">80.1s (3.18s)</td>
+<td align="right">34.1s (1.07s)</td>
+<td align="right" style="font-weight: bold;">2.35x</td>
+<td align="right" style="font-weight: bold;">2.97x</td></tr>
+<tr> <td>Timely dataflow</td>
+<td align="right">16x8</td>
+<td align="right">231.2 (10.25s)</td>
+<td align="right">53.9s (2.13s)</td>
+<td align="right">23.7s (0.76s)</td>
+<td align="right" style="font-weight: bold;">2.27x</td>
+<td align="right" style="font-weight: bold;">2.80x</td></tr>
+<tr> <td>GraphX</td>
+<td align="right">8x8</td>
+<td></td>
+<td align="right">666.8s (14.40s)</td>
+<td align="right">682.6s (15.00s)</td>
+<td align="right" style="font-weight: bold;">0.98x</td>
+<td align="right" style="font-weight: bold;">0.96x</td></tr>
+<tr> <td>GraphX</td>
+<td align="right">16x8</td>
+<td></td>
+<td align="right">361.8s (9.30s)</td>
+<td align="right">357.9s (8.30s)</td>
+<td align="right" style="font-weight: bold;">1.01x</td>
+<td align="right" style="font-weight: bold;">1.12x</td></tr>
+<caption>Elapsed and (per-iteration) times for twenty PageRank iterations on multiple machines using the <code>uk_2007_05</code> graph, comparing 1G and 10G networks</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>Phew, that’s a lot of data! There are a few important observations that we can draw from them, though:</p>
+
+<ol>
+  <li>
+    <p>Making the network faster <strong>does not</strong> improve GraphX’s performance much (at most 10-12%), which confirms the observations of the NSDI paper.</p>
+  </li>
+  <li>
+    <p>Making the network faster <strong>does</strong> improve timely dataflow’s performance (by 2-3x), which limits the generality of the conclusions of the NSDI paper.</p>
+  </li>
+  <li>
+    <p>Communication cost <strong>does not</strong> dominate GraphX’s performance, but it <strong>does</strong> dominate the timely dataflow performance, meaning graph computations can be communication-bound on a good implementation.</p>
+  </li>
+  <li>
+    <p>Nevertheless, performance strictly improves as we add machines, invalidating the claim that distributed systems will not be faster than a single machine when running a communication-bound graph computation on a graph that fits into the machine.</p>
+  </li>
+  <li>
+    <p>Worker-level aggregation has the <em>opposite</em> impact on a 10G network and a 1G network: on 10G, it yields improvements, but on 1G, it makes things slower. Moreover, at 10G, worker-level aggregation outperforms process-level aggregation (not shown in graphs), despite sending more data.</p>
+  </li>
+  <li>
+    <p>GraphX <em>scales</em> well from eight to sixteen machines on the <code>uk_2007_05</code> graph, but <a href="https://www.usenix.org/system/files/conference/hotos15/hotos15-paper-mcsherry.pdf">as the COST paper has suggests</a>, this scalability could just come from parallelizable overheads.</p>
+  </li>
+  <li>
+    <p>Timely dataflow on a 10G network outperforms GraphX <strong>by up to 20x</strong> on the per-iteration runtime using 16 machines (16.27x for <code>twitter_rv</code>, and 19.74x for <code>uk_2007_05</code>).</p>
+  </li>
+</ol>
+
+<p>Those results allow us to answer our questions from the beginning, as we will see now.</p>
+
+<h2 id="conclusion-for-the-moment">Conclusion (for the moment)</h2>
+
+<p>This concludes the first part of our investigation. Apparently both 10G networks and distributed data processing systems <em>are</em> useful for PageRank. Phew. Existential crisis averted!</p>
+
+<p>As we have seen, the three implementations (GraphX and the two timely dataflow ones) have <em>different bottleneck resources</em>. GraphX does more compute and is CPU-bound even on the 1G network, whereas the leaner timely dataflow implementations become CPU-bound only on the 10G network. Drawing conclusions about the scalability or limitations of either system based on the performance of the other is likely misguided.</p>
+
+<p>Fast 10G networks <em>do</em> help reduce reduce the runtime of parallel computations by significantly more than 2-10%: we’ve seen <strong>speedups up to 3x going from 1G to 10G</strong>. However, the structure of the computation and the implementation of the data processing system must be suited to fast networks, and different strategies are appropriate for 1G and 10G networks. For the latter, being less clever and communicating more sometimes actually helps.</p>
+
+<p>Distributed data processing makes sense even for graph computations where the graph fits into one machine. When computation and communication are overlapped sufficiently, <strong>using multiple machines yields speedups up to 5x</strong> (e.g., on <code>twitter_rv</code>, 1x8 vs. 16x8). Running everything locally isn’t necessarily faster.</p>
+
+<p>Moreover, we’ve shown that we can make PageRank run <strong>20x faster per iteration using distributed timely dataflow</strong> than using GraphX (from 15.5s to 0.76s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!</p>
+
+<p>In part two, we will follow up with a more in-depth analysis of <em>why</em> timely dataflow is so much faster than GraphX. We will look at their respective resource usage over the runtime of the computation, and investigate via a lower-bound analysis whether it is at all possible to make a 1G network outperform a 10G one by doing cunning aggregation (spoiler: it’s not!).</p>
+
+<p>Come back for more in a few days!</p>
+
+<hr />
+
+<div style="font-size: 0.8em">
+
+<a href="#fn0l" name="fn0"><sup>0</sup></a> &ndash; This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) [indicated that](https://twitter.com/rxin/status/556365235032821760), for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That's a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that "systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine". That's a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that [systems need to be evaluated using larger graphs](http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html). In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.
+
+<p></p>
+
+<a href="#fn1l" name="fn1"><sup>1</sup></a> &ndash; Some graph processing systems (e.g., [PowerGraph](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf)) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn't seem necessary, as we will see.
+
+<p></p>
+
+<a href="#fn2l" name="fn2"><sup>2</sup></a> &ndash; If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we'd end up with each machine sending and receiving &approx;15 GB of messages per iteration when processing the widely-used `twitter_rv` graph. Clearly not a good plan.
+
+<p></p>
+
+<a href="#fn3l" name="fn3"><sup>3</sup></a> &ndash; About 3 GB per iteration for each machine on the `twitter_rv` graph.
+
+<p></p>
+
+<a href="#fn4l" name="fn4"><sup>4</sup></a> &ndash; The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.
+
+<p></p>
+
+<a href="#fn5l" name="fn5"><sup>5</sup></a> &ndash; We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to `m2.4xlarge` EC2 instances).
+
+<p></p>
+
+<a href="#fn6l" name="fn6"><sup>6</sup></a> &ndash; You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it's because structuring the program as dataflow adds some overhead.
+
+<p></p>
+
+<a href="#fn7l" name="fn7"><sup>7</sup></a> &ndash; The smarter single-threaded implementation uses an "exotic" graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won't use it in the distributed implementation in this post.
+</div>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+
+  </body>
+
+</html>

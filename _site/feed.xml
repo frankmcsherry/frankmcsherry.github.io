@@ -5,9 +5,446 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 12 May 2015 15:38:37 +0200</pubDate>
-    <lastBuildDate>Tue, 12 May 2015 15:38:37 +0200</lastBuildDate>
+    <pubDate>Wed, 08 Jul 2015 14:35:14 +0200</pubDate>
+    <lastBuildDate>Wed, 08 Jul 2015 14:35:14 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
+    
+      <item>
+        <title>The impact of fast networks on graph analytics</title>
+        <description>&lt;p&gt;&lt;strong&gt;&lt;em&gt;tl;dr:&lt;/em&gt; A recent NSDI paper argued that data analytics stacks don’t get much faster at tasks like PageRank when given better networking, but this is likely just a property of the stack they evaluated (Spark and GraphX) rather than generally true. A different framework (timely dataflow) goes 6x faster than GraphX on a 1G network, which improves by 3x to 15-17x faster than GraphX on a 10G network.&lt;/strong&gt;&lt;/p&gt;
+
+&lt;p&gt;I spent the past few weeks visiting the &lt;a href=&quot;http://camsas.org&quot;&gt;CamSaS folks&lt;/a&gt; at the &lt;a href=&quot;http://www.cl.cam.ac.uk&quot;&gt;University of Cambridge Computer Lab&lt;/a&gt;. Together, we did some interesting work, which we – &lt;a href=&quot;http://www.cl.cam.ac.uk/~ms705/&quot;&gt;Malte Schwarzkopf&lt;/a&gt; and I – are now going to tell you about.&lt;/p&gt;
+
+&lt;p&gt;Recently, a paper entitled “&lt;a href=&quot;https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-ousterhout.pdf&quot;&gt;Making Sense of Performance in Data Analytics Frameworks&lt;/a&gt;” appeared at &lt;a href=&quot;https://www.usenix.org/conference/nsdi15/&quot;&gt;NSDI 2015&lt;/a&gt;. This paper contains some surprising results: in particular, it argues that data analytics stacks are limited more by CPU than they are by network or disk IO. Specifically,&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;&lt;em&gt;“Network optimizations can only reduce job completion time by a median of at most 2%. The network is not a bottleneck because much less data is sent over the network than is transferred to and from disk. As a result, network I/O is mostly irrelevant to overall performance, even on 1Gbps networks.”&lt;/em&gt; (§1)&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;The measurements were done using Spark, but the authors argue that they generalize to other systems. We thought that this was surprising, as it doesn’t match our experience with other data processing systems. In this blog post, we will look into whether these observations do indeed generalize.&lt;/p&gt;
+
+&lt;p&gt;One of the three workloads in the paper is the &lt;a href=&quot;https://amplab.cs.berkeley.edu/benchmark/&quot;&gt;BDBench query set&lt;/a&gt; from Berkeley, which includes a “page-rank-like computation”. Moreover, PageRank also appears as an extra example in the &lt;a href=&quot;http://www.eecs.berkeley.edu/~keo/talks/2015_05_05_NSDI_MakingSense.pdf&quot;&gt;NSDI slide deck&lt;/a&gt; (slide 38-39), used there to illustrate that at most a 10% improvement in job completion time can be had even for a network-intensive workload.&lt;/p&gt;
+
+&lt;p&gt;This was especially surprising to us because of the recent discussion around whether graph computations require distributed data processing systems at all. Several distributed systems &lt;a href=&quot;https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry&quot;&gt;get beat by a simple, single-threaded implementation&lt;/a&gt; on a laptop for various graph computations. The common interpretation is that graph computations are communication-limited; the network gets in the way, and you are better off with one machine if the computation fits.&lt;sup&gt;&lt;a name=&quot;fn0l&quot; href=&quot;#fn0&quot;&gt;0&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;
+
+&lt;p&gt;These two positions – &lt;em&gt;(i)&lt;/em&gt; “PageRank cannot be improved by more than 10% via a faster network”, and &lt;em&gt;(ii)&lt;/em&gt; “graph computations such as PageRank are communication-bound, and benefit from very fast local communication” – didn’t jive with each other, and raised a bunch of questions: are these computations CPU-bound, or communication-bound, or is it perhaps more complicated than that? And shouldn’t it still be possible to make multiple computers connected by a decent network go faster than one computer?&lt;/p&gt;
+
+&lt;p&gt;We are going to look in to the performance of distributed PageRank using both GraphX (a graph processing framework on top of Spark) and &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;timely dataflow&lt;/a&gt;, on a cluster with both 1G and 10G network interfaces.&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;&lt;strong&gt;tl;dr #1&lt;/strong&gt;: Network speed may not matter with a Spark-based stack, but it &lt;em&gt;does&lt;/em&gt; matter to higher-performance analytics stacks, and for graph processing especially. By moving from a 1G to a 10G network, we see a 2-3x improvement in performance for timely dataflow.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;&lt;strong&gt;tl;dr #2&lt;/strong&gt;: A well-balanced distributed system offers performance improvements even for graph processing problems that fit into a single machine; running things locally isn’t always the best strategy.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;&lt;strong&gt;tl;dr #3&lt;/strong&gt;: PageRank performance on GraphX is primarily &lt;em&gt;system&lt;/em&gt;-bound. We see a 4x-20x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;Obviously, take all these conclusions with a grain of salt: we will discuss some caveats and design decisions that some may disagree with. However, our code is &lt;a href=&quot;http://github.com/frankmcsherry/pagerank&quot;&gt;available&lt;/a&gt; alongside &lt;a href=&quot;http://github.com/frankmcsherry/pagerank/README.md&quot;&gt;instructions&lt;/a&gt;, so you may try it for yourself!&lt;/p&gt;
+
+&lt;h2 id=&quot;overview&quot;&gt;Overview&lt;/h2&gt;
+
+&lt;p&gt;We set out to understand the bottlenecks in a non-trivial computation that we understand pretty well: PageRank. To be clear, PageRank is not some brilliant computation, but it is more interesting than a distributed &lt;code&gt;grep&lt;/code&gt;. It is a good example of computations that exchange data, aggregate data, and benefit from maintaining indexed data resident in memory. It can also be implemented in different ways, and thus helps tease out how well (or badly) a particular approach fits with a particular system.&lt;/p&gt;
+
+&lt;p&gt;This was also a good opportunity to try out &lt;a href=&quot;https://github.com/frankmcsherry/timely-dataflow&quot;&gt;timely dataflow in Rust&lt;/a&gt;, which is both a port to &lt;a href=&quot;http://www.rust-lang.org&quot;&gt;Rust&lt;/a&gt; and an extension of the timely dataflow paradigm in &lt;a href=&quot;http://research.microsoft.com/Naiad&quot;&gt;Naiad&lt;/a&gt;. Timely dataflow in Rust had only been run on a laptop so far, so this was a good chance to shake some bugs out.&lt;/p&gt;
+
+&lt;p&gt;Additionally, the Cambridge Computer Lab has a new “model data centre”, which is a modern cluster equipped with 10G networking kit, and we wanted to see how fast this Rust code can go. As it turns out, it now moves pretty briskly. You’ll see.&lt;/p&gt;
+
+&lt;h2 id=&quot;pagerank&quot;&gt;PageRank&lt;/h2&gt;
+
+&lt;p&gt;PageRank is a not-wildly-complicated graph computation: the idea is that each vertex starts with some amount of real-valued “rank”, which it repeatedly shares along the directed edges to its neighbors. If one keeps doing this for long enough, the real-valued ranks start to stabilize.&lt;/p&gt;
+
+&lt;p&gt;Here is a straightforward, serial PageRank implementation in Rust:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pagerank&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;G&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;graph&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;G&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Graph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertices&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;usize&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;alpha&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;f32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// mutable per-vertex state&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;f32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertices&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;f32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertices&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;deg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;f32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertices&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;// determine vertex degrees&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;graph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;deg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;f32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;// perform 20 iterations&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;_iteration&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;..&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;20&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;// prepare src ranks&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertex&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;..&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;vertices&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vertex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;alpha&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vertex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;deg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vertex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vertex&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;f32&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;alpha&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;// do the expensive part&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;graph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;If we look at the code, the computation manipulates per-vertex state (preparing &lt;code&gt;src[vertex]&lt;/code&gt; and &lt;code&gt;dst[vertex]&lt;/code&gt;, using &lt;code&gt;deg[vertex]&lt;/code&gt;), and then swings through &lt;code&gt;graph&lt;/code&gt;, increasing &lt;code&gt;dst[y]&lt;/code&gt; by &lt;code&gt;src[x]&lt;/code&gt; for each graph edge &lt;code&gt;(x,y)&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;The only part of this computation that makes parallelization difficult is updating &lt;code&gt;dst[y]&lt;/code&gt;: because the edges may link any pairs of vertices, we don’t have an &lt;em&gt;a priori&lt;/em&gt; partitioning of responsibility for these updates. So we’ll have to do that.&lt;/p&gt;
+
+&lt;h2 id=&quot;a-distributed-pagerank&quot;&gt;A Distributed PageRank&lt;/h2&gt;
+
+&lt;p&gt;We want to map this computation across multiple workers (threads, processes, or computers), and fortunately there are several fairly simple ways to do this. The most common approach is to partition responsibility for each &lt;code&gt;vertex&lt;/code&gt; across the workers, so that each worker is responsible for a roughly equal number of vertices.&lt;sup&gt;&lt;a name=&quot;fn1l&quot; href=&quot;#fn1&quot;&gt;1&lt;/a&gt;&lt;/sup&gt; We will assign the responsibility for processing vertex &lt;code&gt;v&lt;/code&gt; to worker &lt;code&gt;v % workers&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;To partition the computation among workers, we also need to partition the relevant state (inputs and intermediate data) as well. The input to the computation is just a set of edges, so we must make sure that edge &lt;code&gt;(x, y)&lt;/code&gt; makes its way to worker &lt;code&gt;x % workers&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Once we have distributed all the edges to the workers, the PageRank computation is just a matter of repeatedly applying the per-vertex updates, which each worker can do independently, and then determining and communicating the updates to the ranks of &lt;em&gt;other&lt;/em&gt; vertices.&lt;/p&gt;
+
+&lt;p&gt;Each worker prepares a message of the form &lt;code&gt;(y, src[x])&lt;/code&gt;, indicating the intended update, rather than directly applying &lt;code&gt;+=&lt;/code&gt; to the ranks. These updates are then exchanged between the workers, i.e., updates to a vertex &lt;code&gt;y&lt;/code&gt; are sent to worker &lt;code&gt;y % workers&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;implementation-1-send-everything&quot;&gt;Implementation #1: Send everything&lt;/h3&gt;
+
+&lt;p&gt;This will be our first implementation, which we will quickly discard as being hilariously inefficient. For every edge &lt;code&gt;(x, y)&lt;/code&gt; at a vertex, we prepare a message &lt;code&gt;(y, rank)&lt;/code&gt; indicating interest in performing a &lt;code&gt;+=&lt;/code&gt; operation for the edge destination &lt;code&gt;y&lt;/code&gt;. We exchange all of these messages, sending each to the worker in charge of the recipient vertex.&lt;/p&gt;
+
+&lt;p&gt;The figure below illustrates how this would proceed in a setting with four workers (&lt;em&gt;w&lt;sub&gt;0&lt;/sub&gt;&lt;/em&gt; to &lt;em&gt;w&lt;sub&gt;3&lt;/sub&gt;&lt;/em&gt;) in two processes (&lt;strong&gt;P&lt;sub&gt;0&lt;/sub&gt;&lt;/strong&gt; and &lt;strong&gt;P&lt;sub&gt;1&lt;/sub&gt;&lt;/strong&gt;).&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://www.frankmcsherry.org/assets/pr-naive.png&quot; alt=&quot;Na&amp;iuml;ve no-aggregation implementation of distributed PageRank.&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;However, this approach needs to send some data across the network &lt;em&gt;for every edge in the graph&lt;/em&gt;. That would certainly result in some serious communication,&lt;sup&gt;&lt;a name=&quot;fn2l&quot; href=&quot;#fn2&quot;&gt;2&lt;/a&gt;&lt;/sup&gt; and 10G would look pretty good compared to 1G. However, we would only be able to conclude that a fairly naïve implementation is communication-bound. Let’s see if we can do better.&lt;/p&gt;
+
+&lt;h3 id=&quot;implementation-2-worker-level-aggregation&quot;&gt;Implementation #2: Worker-level aggregation&lt;/h3&gt;
+
+&lt;p&gt;Recall that each worker manages multiple vertices. Their edges may well have destinations in common, so each worker can accumulate the messages for each destination, and send just one message for each distinct destination. The worker can accumulate these updates into a hash table, or a large sparse vector (proportional to the number of vertices in the entire graph), but there is a much simpler way.&lt;/p&gt;
+
+&lt;p&gt;Each worker groups its edges by &lt;em&gt;destination&lt;/em&gt;, rather than by source. By so doing, a worker can iterate through its destinations, accumulate its updates from each source rank, and then issue one update for the destination.&lt;/p&gt;
+
+&lt;p&gt;The single-threaded interpretation of this code might look like this:&lt;/p&gt;
+
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;c1&quot;&gt;// replaces &amp;quot;for (x, y) in graph.edges() { dst[y] += src[x]; }&amp;quot;&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;xs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;graph_transpose&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;edges&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;xs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sum&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;Because each worker only has edges from vertices &lt;code&gt;x&lt;/code&gt; equal modulo &lt;code&gt;workers&lt;/code&gt;, each value of &lt;code&gt;x / workers&lt;/code&gt; is distinct. We can compact &lt;code&gt;src&lt;/code&gt; by a factor of &lt;code&gt;workers&lt;/code&gt;, accessing &lt;code&gt;src[x / workers]&lt;/code&gt; instead of &lt;code&gt;src[x]&lt;/code&gt;. Compared to the source-grouped approach, the code does random access into a small vector &lt;code&gt;src&lt;/code&gt; rather than a large vector &lt;code&gt;dst&lt;/code&gt;, which benefits locality.&lt;/p&gt;
+
+&lt;p&gt;The figure below illustrates this: each worker merges updates for the same destination (bold number) into a single update. As a result, this example four-worker setup ends up exchanging only 12 messages, instead of 16 in the naïve version.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://www.frankmcsherry.org/assets/pr-worker-agg.png&quot; alt=&quot;Worker-level aggregation implementation of distributed PageRank.&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Moreover, this approach also produces outputs as it goes, which allows workers to overlap communication with communication: a worker can start telling other workers about its updates right away, using the network at the same time as the rest of the computer.&lt;/p&gt;
+
+&lt;h3 id=&quot;implementation-3-process-level-aggregation&quot;&gt;Implementation #3: Process-level aggregation&lt;/h3&gt;
+
+&lt;p&gt;The worker-level aggregation implementation (#2, above) is our best-performing implementation for a 10G network, but it still sends quite a bit of data.&lt;sup&gt;&lt;a name=&quot;fn3l&quot; href=&quot;#fn3&quot;&gt;3&lt;/a&gt;&lt;/sup&gt; To more fairly compare 1G and 10G networks, we can aggregate a bit more aggressively and move aggregation to the &lt;em&gt;process level&lt;/em&gt; to further reduce the amount of data transmitted. This, however, comes at the expense of more computation and more synchronization, since process-level aggregates across multiple workers must await all data from each worker. This reduces the overlapping of computation and communication that we can do, but we send less data overall.&lt;/p&gt;
+
+&lt;p&gt;Again, the figure illustrates this: after we have aggregated updates at the worker level, we also aggregate them at the process level. In the example, this reduces the number of messages from 12 to 9.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://www.frankmcsherry.org/assets/pr-process-agg.png&quot; alt=&quot;Process-level aggregationo implementation of distributed PageRank.&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;We could potentially try and make this implementation even smarter, cutting computation and overlapping communication. However, as we will show in part two of our investigation, we cannot expect a 1G network to win out over 10G even with infinitely fast aggregation.&lt;/p&gt;
+
+&lt;h2 id=&quot;evaluation&quot;&gt;Evaluation&lt;/h2&gt;
+
+&lt;p&gt;Let’s see how well our implementations work!&lt;/p&gt;
+
+&lt;p&gt;We evaluate the time to do twenty iterations of PageRank on the CamSaS cluster,&lt;sup&gt;&lt;a name=&quot;fn4l&quot; href=&quot;#fn4&quot;&gt;4&lt;/a&gt;&lt;/sup&gt; using Spark/GraphX 1.4 and our timely dataflow implementation.&lt;/p&gt;
+
+&lt;p&gt;We use two graphs, those used by &lt;a href=&quot;https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf&quot;&gt;the GraphX paper&lt;/a&gt;: a 1.4B edge &lt;a href=&quot;http://an.kaist.ac.kr/traces/WWW2010.html&quot;&gt;graph of Twitter followers&lt;/a&gt; (&lt;code&gt;twitter_rv&lt;/code&gt;), and a 3.7B edge &lt;a href=&quot;http://law.di.unimi.it/webdata/uk-2007-05/&quot;&gt;graph of web links&lt;/a&gt; (&lt;code&gt;uk_2007_05&lt;/code&gt;). The &lt;code&gt;uk_2007_05&lt;/code&gt; graph is also the one used for the results &lt;a href=&quot;https://twitter.com/kayousterhout/status/596034007063638016&quot;&gt;shown in the NSDI slide deck&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;some-baseline-measurements&quot;&gt;Some baseline measurements&lt;/h3&gt;
+
+&lt;p&gt;Before we start, let’s think about existing baselines that should give some context.&lt;/p&gt;
+
+&lt;p&gt;Below, we show previously reported measurements from Spark and GraphX, as well as the runtime of GraphX on our cluster, and the runtime of two single-threaded implementations (from &lt;a href=&quot;https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry&quot;&gt;the COST paper&lt;/a&gt;).&lt;/p&gt;
+
+&lt;p align=&quot;center&quot;&gt;
+&lt;img src=&quot;http://www.frankmcsherry.org/plots/pr-baselines.png&quot; /&gt;
+&lt;/p&gt;
+
+&lt;center&gt;
+&lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
+&lt;tr&gt; &lt;th&gt;System&lt;/th&gt; &lt;th&gt;source&lt;/th&gt; &lt;th&gt;cores&lt;/th&gt; &lt;th&gt;twitter_rv&lt;/th&gt; &lt;th&gt;uk_2007_05&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Spark&lt;/td&gt; &lt;td&gt;&lt;a href=&quot;https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf&quot;&gt;GraphX paper&lt;/a&gt;&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;857s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1759s&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt; &lt;td&gt;&lt;a href=&quot;https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf&quot;&gt;GraphX paper&lt;/a&gt;&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;419s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;462s&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt; &lt;td&gt;measured on our cluster&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;334s&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;362s&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Single thread (simpler)&lt;/td&gt; &lt;td&gt;&lt;a href=&quot;https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry&quot;&gt;COST paper&lt;/a&gt;&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;300s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;651s&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Single thread (smarter)&lt;/td&gt; &lt;td&gt;&lt;a href=&quot;https://www.usenix.org/conference/hotos15/workshop-program/presentation/mcsherry&quot;&gt;COST paper&lt;/a&gt;&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;110s&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;256s&lt;/td&gt; &lt;/tr&gt;
+&lt;caption&gt;Twenty pagerank iterations, baseline measurements.&lt;/caption&gt;
+&lt;/table&gt;
+&lt;/center&gt;
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;p&gt;So far, nothing new: the measurement on our cluster confirms that the numbers from the GraphX paper can be reproduced,&lt;sup&gt;&lt;a name=&quot;fn5l&quot; href=&quot;#fn5&quot;&gt;5&lt;/a&gt;&lt;/sup&gt;. Moreover, the laptop performs pretty well even though it’s using only one CPU core, rather than 128. On the &lt;code&gt;twitter_rv&lt;/code&gt; graph, the single-threaded implementation &lt;em&gt;always&lt;/em&gt; beats the distributed implementations, and on the &lt;code&gt;uk_2007_05&lt;/code&gt; graph, the simple single-threaded implementation is only ~50% slower than GraphX (at 128x less resources!). The smarter single-threaded implementation with a Hilbert space-filling curve graph layout always beats the distributed systems by between 30% and 3x.&lt;/p&gt;
+
+&lt;p&gt;Is that bad news for distributed graph processing generally? Let’s see.&lt;/p&gt;
+
+&lt;h3 id=&quot;a-timely-dataflow-implementation&quot;&gt;A timely dataflow implementation&lt;/h3&gt;
+
+&lt;p&gt;Let’s take our data-parallel implementation out for a spin. We’ll start with just a single machine, and move from one core to multiple cores. We measure the total elapsed time (first graph), and the average per-iteration time of the last ten iterations (second graph). For reference, we also show the results for GraphX, and the simple single-threaded implementations (as horizontal bars).&lt;/p&gt;
+
+&lt;p align=&quot;center&quot;&gt;
+&lt;img src=&quot;http://www.frankmcsherry.org/plots/pr-multithreaded.png&quot; /&gt;
+&lt;/p&gt;
+
+&lt;p align=&quot;center&quot;&gt;
+&lt;img src=&quot;http://www.frankmcsherry.org/plots/pr-multithreaded-periter.png&quot; /&gt;
+&lt;/p&gt;
+
+&lt;!-- ![End-to-end runtimes for multi-threaded timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-multithreaded.png)
+![Per-iteration runtimes for multi-threaded timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-multithreaded-periter.png) --&gt;
+
+&lt;center&gt;
+&lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
+&lt;tr&gt; &lt;th&gt;System&lt;/th&gt; &lt;th&gt;cores&lt;/th&gt; &lt;th&gt;twitter_rv&lt;/th&gt; &lt;th&gt;uk_2007_05&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;350.7s (11.33s)&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;442.2s (8.90s)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;2&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;196.5s (6.39s)&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;297.3s (5.67s)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;4&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;182.4s (6.12s)&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;192.0s (3.78s)&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;8&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;107.6s (3.70s)&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;137.1s (3.29s)&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;12&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;95.0s (3.32s)&lt;/td&gt;&lt;td align=&quot;right&quot;&gt;114.5s (2.65s)&lt;/td&gt; &lt;/tr&gt;
+&lt;caption&gt;Twenty pagerank iterations on one machine, multiple threads.&lt;/caption&gt;
+&lt;/table&gt;
+&lt;/center&gt;
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;p&gt;Well, this is good: with one thread, we still perform similarly as GraphX at 128, and we outperform the simple single-threaded measurement with just two threads&lt;sup&gt;&lt;a name=&quot;fn6l&quot; href=&quot;#fn6&quot;&gt;6&lt;/a&gt;&lt;/sup&gt;, and we outperform the smart single-threaded measurement with eight threads.&lt;sup&gt;&lt;a name=&quot;fn7l&quot; href=&quot;#fn7&quot;&gt;7&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;
+
+&lt;p&gt;This suggests that parallelism inside a single machine, at least, helps make this computation go faster. Maybe multiple computers, with all that networking in between, end up being slower though?&lt;/p&gt;
+
+&lt;h3 id=&quot;multiple-computers-1g-vs-10g&quot;&gt;Multiple computers: 1G vs. 10G&lt;/h3&gt;
+
+&lt;p&gt;Let’s now see what happens when we distribute the computation over multiple computers. Here we have the choice of using either a 1G network interface or a 10G network interface; we will measure both, revealing the performance gains that 10G brings (if any).&lt;/p&gt;
+
+&lt;p&gt;In addition to the worker-level aggregation implementation from above, we also include measurements for process-level aggregation on a 1G network (labelled “1G+”). This is more representative of a 1G-optimized implementation, and matches what GraphX does.&lt;/p&gt;
+
+&lt;p&gt;For each configuration, we again report the elapsed time to perform twenty iterations (first graph), and the average of the final ten iterations (second graph). Because GraphX and our implementation have different one-off start-up costs, the average iteration time when the computation is running is probably the fairest metric for comparison.&lt;/p&gt;
+
+&lt;p align=&quot;center&quot;&gt;
+&lt;img src=&quot;http://www.frankmcsherry.org/plots/pr-distributed.png&quot; /&gt;
+&lt;/p&gt;
+
+&lt;p align=&quot;center&quot;&gt;
+&lt;img src=&quot;http://www.frankmcsherry.org/plots/pr-distributed-periter.png&quot; /&gt;
+&lt;/p&gt;
+
+&lt;!-- ![End-to-end runtimes for distributed timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-distributed.png)
+![Per-iteration runtimes for distributed timely dataflow PageRank](http://www.frankmcsherry.org/plots/pr-distributed-periter.png) --&gt;
+
+&lt;center&gt;
+&lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
+&lt;tr&gt; &lt;th&gt;System&lt;/th&gt;
+&lt;th&gt;cores&lt;/th&gt;
+&lt;th&gt;1G&lt;/th&gt;
+&lt;th&gt;1G+&lt;/th&gt;
+&lt;th&gt;10G&lt;/th&gt;
+&lt;th colspan=&quot;2&quot;&gt;10G speedup over 1G+&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr&gt; &lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;total&lt;/th&gt;
+&lt;th&gt;per-iteration&lt;/th&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;1x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;107.6s (3.70s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;107.6s (3.70s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;107.6s (3.70s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;&amp;ndash;&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;&amp;ndash;&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;2x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;115.2s (4.66s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;89.0s (3.51s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;65.6s (2.34s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.36x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.50x&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;4x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;149.4s (6.77s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;80.9s (3.33s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;40.6s (1.49s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.99x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.23x&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;8x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;145.4s (6.60s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;66.5s (2.86s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;27.6s (1.05s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.41x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.72x&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt; &lt;td align=&quot;right&quot;&gt;169.3s (7.51s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;51.8s (2.30s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;19.3s (0.75s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.68x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;3.07x&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt; &lt;td&gt;&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;354.8s (13.4s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;333.7s (12.2s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.06x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.10x&lt;/td&gt; &lt;/tr&gt;
+&lt;caption&gt;Elapsed and (per-iteration) times for twenty PageRank iterations on multiple machines using the &lt;code&gt;twitter_rv graph&lt;/code&gt;, comparing 1G and 10G networks&lt;/caption&gt;
+&lt;/table&gt;
+&lt;/center&gt;
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;center&gt;
+&lt;table border=&quot;1&quot; style=&quot;width:75%&quot;&gt;
+&lt;tr&gt; &lt;th&gt;System&lt;/th&gt;
+&lt;th&gt;cores&lt;/th&gt;
+&lt;th&gt;1G&lt;/th&gt;
+&lt;th&gt;1G+&lt;/th&gt;
+&lt;th&gt;10G&lt;/th&gt;
+&lt;th colspan=&quot;2&quot;&gt;10G speedup over 1G+&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr&gt; &lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;total&lt;/th&gt;
+&lt;th&gt;per-iteration&lt;/th&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;1x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;137.1s (3.29s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;137.1s (3.29s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;137.1s (3.29s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;&amp;ndash;&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;&amp;ndash;&lt;/td&gt; &lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;2x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;173.3s (6.82s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;135.8s (4.82s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;80.7s (2.31s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.68x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.09x&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;4x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;231.9s (9.06s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;119.1s (4.67s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;51.4s (1.54s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.32x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;3.03x&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;8x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;196.4s (8.87s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;80.1s (3.18s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;34.1s (1.07s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.35x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.97x&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;Timely dataflow&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;231.2 (10.25s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;53.9s (2.13s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;23.7s (0.76s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.27x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;2.80x&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;8x8&lt;/td&gt;
+&lt;td&gt;&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;666.8s (14.40s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;682.6s (15.00s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;0.98x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;0.96x&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt; &lt;td&gt;GraphX&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;16x8&lt;/td&gt;
+&lt;td&gt;&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;361.8s (9.30s)&lt;/td&gt;
+&lt;td align=&quot;right&quot;&gt;357.9s (8.30s)&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.01x&lt;/td&gt;
+&lt;td align=&quot;right&quot; style=&quot;font-weight: bold;&quot;&gt;1.12x&lt;/td&gt;&lt;/tr&gt;
+&lt;caption&gt;Elapsed and (per-iteration) times for twenty PageRank iterations on multiple machines using the &lt;code&gt;uk_2007_05&lt;/code&gt; graph, comparing 1G and 10G networks&lt;/caption&gt;
+&lt;/table&gt;
+&lt;/center&gt;
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;p&gt;Phew, that’s a lot of data! There are a few important observations that we can draw from them, though:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Making the network faster &lt;strong&gt;does not&lt;/strong&gt; improve GraphX’s performance much (at most 10-12%), which confirms the observations of the NSDI paper.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Making the network faster &lt;strong&gt;does&lt;/strong&gt; improve timely dataflow’s performance (by 2-3x), which limits the generality of the conclusions of the NSDI paper.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Communication cost &lt;strong&gt;does not&lt;/strong&gt; dominate GraphX’s performance, but it &lt;strong&gt;does&lt;/strong&gt; dominate the timely dataflow performance, meaning graph computations can be communication-bound on a good implementation.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Nevertheless, performance strictly improves as we add machines, invalidating the claim that distributed systems will not be faster than a single machine when running a communication-bound graph computation on a graph that fits into the machine.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Worker-level aggregation has the &lt;em&gt;opposite&lt;/em&gt; impact on a 10G network and a 1G network: on 10G, it yields improvements, but on 1G, it makes things slower. Moreover, at 10G, worker-level aggregation outperforms process-level aggregation (not shown in graphs), despite sending more data.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;GraphX &lt;em&gt;scales&lt;/em&gt; well from eight to sixteen machines on the &lt;code&gt;uk_2007_05&lt;/code&gt; graph, but &lt;a href=&quot;https://www.usenix.org/system/files/conference/hotos15/hotos15-paper-mcsherry.pdf&quot;&gt;as the COST paper has suggests&lt;/a&gt;, this scalability could just come from parallelizable overheads.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Timely dataflow on a 10G network outperforms GraphX &lt;strong&gt;by up to 20x&lt;/strong&gt; on the per-iteration runtime using 16 machines (16.27x for &lt;code&gt;twitter_rv&lt;/code&gt;, and 19.74x for &lt;code&gt;uk_2007_05&lt;/code&gt;).&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Those results allow us to answer our questions from the beginning, as we will see now.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion-for-the-moment&quot;&gt;Conclusion (for the moment)&lt;/h2&gt;
+
+&lt;p&gt;This concludes the first part of our investigation. Apparently both 10G networks and distributed data processing systems &lt;em&gt;are&lt;/em&gt; useful for PageRank. Phew. Existential crisis averted!&lt;/p&gt;
+
+&lt;p&gt;As we have seen, the three implementations (GraphX and the two timely dataflow ones) have &lt;em&gt;different bottleneck resources&lt;/em&gt;. GraphX does more compute and is CPU-bound even on the 1G network, whereas the leaner timely dataflow implementations become CPU-bound only on the 10G network. Drawing conclusions about the scalability or limitations of either system based on the performance of the other is likely misguided.&lt;/p&gt;
+
+&lt;p&gt;Fast 10G networks &lt;em&gt;do&lt;/em&gt; help reduce reduce the runtime of parallel computations by significantly more than 2-10%: we’ve seen &lt;strong&gt;speedups up to 3x going from 1G to 10G&lt;/strong&gt;. However, the structure of the computation and the implementation of the data processing system must be suited to fast networks, and different strategies are appropriate for 1G and 10G networks. For the latter, being less clever and communicating more sometimes actually helps.&lt;/p&gt;
+
+&lt;p&gt;Distributed data processing makes sense even for graph computations where the graph fits into one machine. When computation and communication are overlapped sufficiently, &lt;strong&gt;using multiple machines yields speedups up to 5x&lt;/strong&gt; (e.g., on &lt;code&gt;twitter_rv&lt;/code&gt;, 1x8 vs. 16x8). Running everything locally isn’t necessarily faster.&lt;/p&gt;
+
+&lt;p&gt;Moreover, we’ve shown that we can make PageRank run &lt;strong&gt;20x faster per iteration using distributed timely dataflow&lt;/strong&gt; than using GraphX (from 15.5s to 0.76s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!&lt;/p&gt;
+
+&lt;p&gt;In part two, we will follow up with a more in-depth analysis of &lt;em&gt;why&lt;/em&gt; timely dataflow is so much faster than GraphX. We will look at their respective resource usage over the runtime of the computation, and investigate via a lower-bound analysis whether it is at all possible to make a 1G network outperform a 10G one by doing cunning aggregation (spoiler: it’s not!).&lt;/p&gt;
+
+&lt;p&gt;Come back for more in a few days!&lt;/p&gt;
+
+&lt;hr /&gt;
+
+&lt;div style=&quot;font-size: 0.8em&quot;&gt;
+
+&lt;a href=&quot;#fn0l&quot; name=&quot;fn0&quot;&gt;&lt;sup&gt;0&lt;/sup&gt;&lt;/a&gt; &amp;ndash; This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) [indicated that](https://twitter.com/rxin/status/556365235032821760), for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That&#39;s a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that &quot;systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine&quot;. That&#39;s a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that [systems need to be evaluated using larger graphs](http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html). In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn1l&quot; name=&quot;fn1&quot;&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt; &amp;ndash; Some graph processing systems (e.g., [PowerGraph](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf)) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn&#39;t seem necessary, as we will see.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn2l&quot; name=&quot;fn2&quot;&gt;&lt;sup&gt;2&lt;/sup&gt;&lt;/a&gt; &amp;ndash; If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we&#39;d end up with each machine sending and receiving &amp;approx;15 GB of messages per iteration when processing the widely-used `twitter_rv` graph. Clearly not a good plan.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn3l&quot; name=&quot;fn3&quot;&gt;&lt;sup&gt;3&lt;/sup&gt;&lt;/a&gt; &amp;ndash; About 3 GB per iteration for each machine on the `twitter_rv` graph.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn4l&quot; name=&quot;fn4&quot;&gt;&lt;sup&gt;4&lt;/sup&gt;&lt;/a&gt; &amp;ndash; The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn5l&quot; name=&quot;fn5&quot;&gt;&lt;sup&gt;5&lt;/sup&gt;&lt;/a&gt; &amp;ndash; We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to `m2.4xlarge` EC2 instances).
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn6l&quot; name=&quot;fn6&quot;&gt;&lt;sup&gt;6&lt;/sup&gt;&lt;/a&gt; &amp;ndash; You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it&#39;s because structuring the program as dataflow adds some overhead.
+
+&lt;p&gt;&lt;/p&gt;
+
+&lt;a href=&quot;#fn7l&quot; name=&quot;fn7&quot;&gt;&lt;sup&gt;7&lt;/sup&gt;&lt;/a&gt; &amp;ndash; The smarter single-threaded implementation uses an &quot;exotic&quot; graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won&#39;t use it in the distributed implementation in this post.
+&lt;/div&gt;
+</description>
+        <pubDate>Wed, 08 Jul 2015 19:00:00 +0200</pubDate>
+        <link>http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html</link>
+        <guid isPermaLink="true">http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html</guid>
+        
+        
+        <category>pagerank</category>
+        
+        <category>distributed</category>
+        
+        <category>performance</category>
+        
+      </item>
     
       <item>
         <title>Differential graph computation</title>
@@ -2128,123 +2565,6 @@ Each scope has its own timestamp and path summary types, implementing the corres
         <category>dataflow</category>
         
         <category>naiad</category>
-        
-      </item>
-    
-      <item>
-        <title>Columnarization in Rust, part 2</title>
-        <description>&lt;p&gt;In a previous post, I introduced some work I was doing on columnarization for Rust. It’s obviously very neat, so you should go and have a read; the rest of this post won’t make all that much sense without it. I’m a little worried that it will be plenty confusing even with that background. :D&lt;/p&gt;
-
-&lt;p&gt;Recall the trait &lt;code&gt;ColumnarVec&lt;/code&gt;, used to stash values and then to encode them into binary when asked. It looks like:&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;I described a few implementations of the &lt;code&gt;ColumnarVec&lt;/code&gt; trait for different types &lt;code&gt;T&lt;/code&gt;, including &lt;code&gt;uint&lt;/code&gt; and &lt;code&gt;(T1, T2)&lt;/code&gt;. Why those two, do you ask?&lt;/p&gt;
-
-&lt;p&gt;I thought I would generalize the implementation of &lt;code&gt;ColumnarVec&amp;lt;uint&amp;gt;&lt;/code&gt; to apply for any type &lt;code&gt;T:Copy&lt;/code&gt;, which is to say those types whose binary representation are a full and faithful realization of the data. They are essentially the base types for which I’m able to cast a &lt;code&gt;Vec&amp;lt;T&amp;gt;&lt;/code&gt; to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;I put together a general implementation, which (you guessed it) we’re about to see. Here it is:&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;impl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Copy&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Option&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;unsafe&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;to_bytes_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;replace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;});&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;self&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;unsafe&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;to_typed_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;buffers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unwrap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;Both &lt;code&gt;push&lt;/code&gt; and &lt;code&gt;pop&lt;/code&gt; are pretty simple, and &lt;code&gt;encode&lt;/code&gt; and &lt;code&gt;decode&lt;/code&gt; are where the business happens.&lt;/p&gt;
-
-&lt;p&gt;Actually, if you reflect back on the previous post, you might notice that there wasn’t any evident encoding or decoding business; the implementations presented there only passed on calls to other &lt;code&gt;encode&lt;/code&gt; and &lt;code&gt;decode&lt;/code&gt; methods. Here we see what happens. Madness, to my object-orientated brain.&lt;/p&gt;
-
-&lt;p&gt;I asked a few people, and apparently it is just me who has my mind blown at the idea of assigning to &lt;code&gt;*self&lt;/code&gt; in a method. I don’t even think that is a thing in C#. But we certainly are doing it here, baby! The &lt;code&gt;replace&lt;/code&gt; method swaps a new vector in to &lt;code&gt;self&lt;/code&gt; and returns what used to be there, which we unsafely cast (code omitted due to shame, public health) to a &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;trouble-back-at-the-ranch&quot;&gt;Trouble back at the ranch&lt;/h2&gt;
-
-&lt;p&gt;This all works, as far as I can see. Everything checks out, except…  back in &lt;code&gt;main.rs&lt;/code&gt; there is trouble.&lt;/p&gt;
-
-&lt;p&gt;Up until this point, there was a unique implementation of &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt; for each type &lt;code&gt;T&lt;/code&gt;. This meant that Rust had no problem finding an implementation when I just told it the type &lt;code&gt;T&lt;/code&gt;. Now we have two implementations for &lt;code&gt;(uint, uint)&lt;/code&gt;: the implementation we discussed last time based on its pair nature, and a new implementation because &lt;code&gt;(uint, uint)&lt;/code&gt; implements &lt;code&gt;Copy&lt;/code&gt;.*&lt;/p&gt;
-
-&lt;p&gt;Now, this is not necessarily a huge problem. We have an abundance of implementations, and if you show up with a &lt;code&gt;Vec&amp;lt;(uint, uint)&amp;gt;&lt;/code&gt; we’ll know what to do, and if you show up with a &lt;code&gt;(Vec&amp;lt;uint&amp;gt;, Vec&amp;lt;uint&amp;gt;)&lt;/code&gt; we’ll also know what to do. It’s only a problem because we had previously exploited type inference to magic up the type in the first place, so we never even had to mention either of these types. Now we might be stuck asking the user to write down some disasterously complicated type for their columnarizer, because we can’t figure out which one they want.&lt;/p&gt;
-
-&lt;p&gt;*: Technically &lt;code&gt;Copy&lt;/code&gt; is a “kind”, not a trait. I don’t really know what this means.&lt;/p&gt;
-
-&lt;h2 id=&quot;frank-invents-an-antipattern&quot;&gt;Frank invents an [anti]pattern&lt;/h2&gt;
-
-&lt;p&gt;Given that I’m new to this fancy-language scene, I thought I’d make up a neat way to indicate a default &lt;code&gt;ColumnarVec&lt;/code&gt; implementator for each type &lt;code&gt;T&lt;/code&gt;. This would allow us to keep both implementations for &lt;code&gt;(uint, uint)&lt;/code&gt;, and other copyable types. So I added the trait&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;pub&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Columnar&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Self&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;All this trait means is that something implementing it, say a type &lt;code&gt;T&lt;/code&gt;, identifies a type &lt;code&gt;R&lt;/code&gt; it likes which implements &lt;code&gt;ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. It says &lt;code&gt;Self&lt;/code&gt; up there, but that is the placeholder for the type’s name.&lt;/p&gt;
-
-&lt;p&gt;Now we just go and implement &lt;code&gt;Columnar&lt;/code&gt; for as many types as we would like, for example:&lt;/p&gt;
-
-&lt;p&gt;&lt;code&gt;impl Columnar&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt; for u8 { }&lt;/code&gt;&lt;/p&gt;
-
-&lt;p&gt;This just says that &lt;code&gt;u8&lt;/code&gt; is a type that would prefer to use &lt;code&gt;Vec&amp;lt;u8&amp;gt;&lt;/code&gt; as its default imlementation of &lt;code&gt;ColumnarVec&amp;lt;u8&amp;gt;&lt;/code&gt;. Pretty good choice. The other examples are pretty simple too, but they start repurposing &lt;code&gt;T&lt;/code&gt; and &lt;code&gt;R&lt;/code&gt; to mean other things, and no one is happy.&lt;/p&gt;
-
-&lt;p&gt;When it comes time to construct a specific &lt;code&gt;ColumnarVec&lt;/code&gt;, we can rely on the uniqueness of a type &lt;code&gt;R&lt;/code&gt; satisfying both of the constraints &lt;code&gt;T: Columnar&amp;lt;R&amp;gt;&lt;/code&gt; &lt;em&gt;and&lt;/em&gt; &lt;code&gt;R: ColumnarVec&amp;lt;T&amp;gt;&lt;/code&gt;. Let’s see it in action:&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;k&quot;&gt;fn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;one_off&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;u8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;
-&lt;span class=&quot;n&quot;&gt;where&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Columnar&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-      &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ColumnarVec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Some&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-        &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-
-    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;encode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;We’ve imposed some constraints on the types &lt;code&gt;T&lt;/code&gt; and &lt;code&gt;R&lt;/code&gt;. The type &lt;code&gt;T&lt;/code&gt; is given to us by the input data, but we are free to find any &lt;code&gt;R&lt;/code&gt; satisfying the constraints. As discussed, we’ve ensured there is but one.&lt;/p&gt;
-
-&lt;p&gt;Now that we are talking about one specific type, we’ll just ask for a default instance of it, in the line&lt;/p&gt;
-
-&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;mut&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;col_vec&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Default&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-
-&lt;p&gt;We indicate the type with &lt;code&gt;: R&lt;/code&gt;, even though we don’t really know what &lt;code&gt;R&lt;/code&gt; will be. We then use the magic of the &lt;code&gt;Default&lt;/code&gt; trait whose implementors all provide a static &lt;code&gt;default()&lt;/code&gt; method returning a valid default instance of the type. You’ll notice (only now) that the definition of &lt;code&gt;ColumnarVec&lt;/code&gt; above requires &lt;code&gt;Default&lt;/code&gt;. It is new as of this post. Don’t look at the previous post, it is previous for a reason.&lt;/p&gt;
-
-&lt;p&gt;Fortunately, the defaults for pairs and vectors and such are all totally sane (empty vectors). Rust insists on RAII (resource acquisition is initialization), which means that you never get your hands on invalid or uninitialized data. No funny constructors to call; the &lt;code&gt;ColumnarVec&lt;/code&gt; is good to go. And go it does!&lt;/p&gt;
-
-&lt;p&gt;Notice that I’ve also used &lt;code&gt;default&lt;/code&gt; to get an initialized &lt;code&gt;Vec&amp;lt;Vec&amp;lt;u8&amp;gt;&amp;gt;&lt;/code&gt;, only I didn’t have to put in the type because there is only one type that &lt;code&gt;encode&lt;/code&gt; accepts!&lt;/p&gt;
-
-&lt;h2 id=&quot;shameless-plug&quot;&gt;Shameless plug&lt;/h2&gt;
-
-&lt;p&gt;Because I’m sure this is going to be the Next Big Thing, I packaged what exists of columnarization in a Rust crate, and stashed it on &lt;a href=&quot;http://crates.io&quot;&gt;crates.io&lt;/a&gt;. So if you are using Rust (you are at the end of a second blog post about using Rust, so let’s say “yes”), you can include it in your project by adding&lt;/p&gt;
-
-&lt;p&gt;&lt;code&gt;columnar=&quot;0.0.4&quot;&lt;/code&gt;&lt;/p&gt;
-
-&lt;p&gt;to the &lt;code&gt;[depedencies]&lt;/code&gt; section of your &lt;code&gt;Cargo.toml&lt;/code&gt; file. I’d love any feedback you have!&lt;/p&gt;
-</description>
-        <pubDate>Tue, 16 Dec 2014 18:00:00 +0100</pubDate>
-        <link>http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</link>
-        <guid isPermaLink="true">http://www.frankmcsherry.org/columnarization/serialization/rust/2014/12/16/Columnarization-2.html</guid>
-        
-        
-        <category>columnarization</category>
-        
-        <category>serialization</category>
-        
-        <category>rust</category>
         
       </item>
     
