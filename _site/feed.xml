@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 09 Jul 2015 06:36:57 +0200</pubDate>
-    <lastBuildDate>Thu, 09 Jul 2015 06:36:57 +0200</lastBuildDate>
+    <pubDate>Thu, 09 Jul 2015 10:27:44 +0200</pubDate>
+    <lastBuildDate>Thu, 09 Jul 2015 10:27:44 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -42,7 +42,7 @@
 &lt;/blockquote&gt;
 
 &lt;blockquote&gt;
-  &lt;p&gt;&lt;strong&gt;tl;dr #3&lt;/strong&gt;: PageRank performance on GraphX is primarily &lt;em&gt;system&lt;/em&gt;-bound. We see a 4x-20x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.&lt;/p&gt;
+  &lt;p&gt;&lt;strong&gt;tl;dr #3&lt;/strong&gt;: PageRank performance on GraphX is primarily &lt;em&gt;system&lt;/em&gt;-bound. We see a 4x-16x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.&lt;/p&gt;
 &lt;/blockquote&gt;
 
 &lt;p&gt;Obviously, take all these conclusions with a grain of salt: we will discuss some caveats and design decisions that some may disagree with. However, our code is &lt;a href=&quot;http://github.com/frankmcsherry/pagerank&quot;&gt;available&lt;/a&gt; alongside &lt;a href=&quot;https://github.com/frankmcsherry/pagerank/blob/master/README.md&quot;&gt;instructions&lt;/a&gt;, so you may try it for yourself!&lt;/p&gt;
@@ -378,7 +378,7 @@
     &lt;p&gt;GraphX &lt;em&gt;scales&lt;/em&gt; well from eight to sixteen machines on the &lt;code&gt;uk_2007_05&lt;/code&gt; graph, but &lt;a href=&quot;https://www.usenix.org/system/files/conference/hotos15/hotos15-paper-mcsherry.pdf&quot;&gt;as the COST paper has suggests&lt;/a&gt;, this scalability could just come from parallelizable overheads.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Timely dataflow on a 10G network outperforms GraphX &lt;strong&gt;by up to 20x&lt;/strong&gt; on the per-iteration runtime using 16 machines (16.27x for &lt;code&gt;twitter_rv&lt;/code&gt;, and 19.74x for &lt;code&gt;uk_2007_05&lt;/code&gt;).&lt;/p&gt;
+    &lt;p&gt;Timely dataflow on a 10G network outperforms GraphX &lt;strong&gt;by up to 16x&lt;/strong&gt; on the per-iteration runtime using 16 machines (16.27x for &lt;code&gt;twitter_rv&lt;/code&gt;, and 10.92x for &lt;code&gt;uk_2007_05&lt;/code&gt;).&lt;/p&gt;
   &lt;/li&gt;
 &lt;/ol&gt;
 
@@ -394,7 +394,7 @@
 
 &lt;p&gt;Distributed data processing makes sense even for graph computations where the graph fits into one machine. When computation and communication are overlapped sufficiently, &lt;strong&gt;using multiple machines yields speedups up to 5x&lt;/strong&gt; (e.g., on &lt;code&gt;twitter_rv&lt;/code&gt;, 1x8 vs. 16x8). Running everything locally isn’t necessarily faster.&lt;/p&gt;
 
-&lt;p&gt;Moreover, we’ve shown that we can make PageRank run &lt;strong&gt;20x faster per iteration using distributed timely dataflow&lt;/strong&gt; than using GraphX (from 15.5s to 0.76s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!&lt;/p&gt;
+&lt;p&gt;Moreover, we’ve shown that we can make PageRank run &lt;strong&gt;16x faster per iteration using distributed timely dataflow&lt;/strong&gt; than using GraphX (from 12.2s to 0.75s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!&lt;/p&gt;
 
 &lt;p&gt;In part two, we will follow up with a more in-depth analysis of &lt;em&gt;why&lt;/em&gt; timely dataflow is so much faster than GraphX. We will look at their respective resource usage over the runtime of the computation, and investigate via a lower-bound analysis whether it is at all possible to make a 1G network outperform a 10G one by doing cunning aggregation (spoiler: it’s not!).&lt;/p&gt;
 

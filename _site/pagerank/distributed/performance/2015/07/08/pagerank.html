@@ -95,7 +95,7 @@
 </blockquote>
 
 <blockquote>
-  <p><strong>tl;dr #3</strong>: PageRank performance on GraphX is primarily <em>system</em>-bound. We see a 4x-20x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.</p>
+  <p><strong>tl;dr #3</strong>: PageRank performance on GraphX is primarily <em>system</em>-bound. We see a 4x-16x performance increase when using timely dataflow on the same hardware, which suggests that GraphX (and other graph processing systems) leave an alarming amount of performance on the table.</p>
 </blockquote>
 
 <p>Obviously, take all these conclusions with a grain of salt: we will discuss some caveats and design decisions that some may disagree with. However, our code is <a href="http://github.com/frankmcsherry/pagerank">available</a> alongside <a href="https://github.com/frankmcsherry/pagerank/blob/master/README.md">instructions</a>, so you may try it for yourself!</p>
@@ -431,7 +431,7 @@
     <p>GraphX <em>scales</em> well from eight to sixteen machines on the <code>uk_2007_05</code> graph, but <a href="https://www.usenix.org/system/files/conference/hotos15/hotos15-paper-mcsherry.pdf">as the COST paper has suggests</a>, this scalability could just come from parallelizable overheads.</p>
   </li>
   <li>
-    <p>Timely dataflow on a 10G network outperforms GraphX <strong>by up to 20x</strong> on the per-iteration runtime using 16 machines (16.27x for <code>twitter_rv</code>, and 19.74x for <code>uk_2007_05</code>).</p>
+    <p>Timely dataflow on a 10G network outperforms GraphX <strong>by up to 16x</strong> on the per-iteration runtime using 16 machines (16.27x for <code>twitter_rv</code>, and 10.92x for <code>uk_2007_05</code>).</p>
   </li>
 </ol>
 
@@ -447,7 +447,7 @@
 
 <p>Distributed data processing makes sense even for graph computations where the graph fits into one machine. When computation and communication are overlapped sufficiently, <strong>using multiple machines yields speedups up to 5x</strong> (e.g., on <code>twitter_rv</code>, 1x8 vs. 16x8). Running everything locally isn’t necessarily faster.</p>
 
-<p>Moreover, we’ve shown that we can make PageRank run <strong>20x faster per iteration using distributed timely dataflow</strong> than using GraphX (from 15.5s to 0.76s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!</p>
+<p>Moreover, we’ve shown that we can make PageRank run <strong>16x faster per iteration using distributed timely dataflow</strong> than using GraphX (from 12.2s to 0.75s per iteration). This tells us something about how much scope for improvement there is even over numbers currently considered state-of-the-art in research!</p>
 
 <p>In part two, we will follow up with a more in-depth analysis of <em>why</em> timely dataflow is so much faster than GraphX. We will look at their respective resource usage over the runtime of the computation, and investigate via a lower-bound analysis whether it is at all possible to make a 1G network outperform a 10G one by doing cunning aggregation (spoiler: it’s not!).</p>
 
