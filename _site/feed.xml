@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 08 Jul 2015 23:08:00 +0200</pubDate>
-    <lastBuildDate>Wed, 08 Jul 2015 23:08:00 +0200</lastBuildDate>
+    <pubDate>Thu, 09 Jul 2015 06:32:26 +0200</pubDate>
+    <lastBuildDate>Thu, 09 Jul 2015 06:32:26 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -402,38 +402,35 @@
 
 &lt;hr /&gt;
 
-&lt;div style=&quot;font-size: 0.8em&quot;&gt;
-
-&lt;a href=&quot;#fn0l&quot; name=&quot;fn0&quot;&gt;&lt;sup&gt;0&lt;/sup&gt;&lt;/a&gt; &amp;ndash; This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) [indicated that](https://twitter.com/rxin/status/556365235032821760), for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That&#39;s a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that &quot;systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine&quot;. That&#39;s a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that [systems need to be evaluated using larger graphs](http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html). In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.
+&lt;p&gt;&lt;a href=&quot;#fn0l&quot; name=&quot;fn0&quot;&gt;&lt;sup&gt;0&lt;/sup&gt;&lt;/a&gt; – This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) &lt;a href=&quot;https://twitter.com/rxin/status/556365235032821760&quot;&gt;indicated that&lt;/a&gt;, for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That’s a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that “systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine”. That’s a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that &lt;a href=&quot;http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html&quot;&gt;systems need to be evaluated using larger graphs&lt;/a&gt;. In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn1l&quot; name=&quot;fn1&quot;&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt; &amp;ndash; Some graph processing systems (e.g., [PowerGraph](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf)) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn&#39;t seem necessary, as we will see.
+&lt;p&gt;&lt;a href=&quot;#fn1l&quot; name=&quot;fn1&quot;&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt; – Some graph processing systems (e.g., &lt;a href=&quot;https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf&quot;&gt;PowerGraph&lt;/a&gt;) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn’t seem necessary, as we will see.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn2l&quot; name=&quot;fn2&quot;&gt;&lt;sup&gt;2&lt;/sup&gt;&lt;/a&gt; &amp;ndash; If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we&#39;d end up with each machine sending and receiving &amp;approx;15 GB of messages per iteration when processing the widely-used `twitter_rv` graph. Clearly not a good plan.
+&lt;p&gt;&lt;a href=&quot;#fn2l&quot; name=&quot;fn2&quot;&gt;&lt;sup&gt;2&lt;/sup&gt;&lt;/a&gt; – If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we’d end up with each machine sending and receiving &amp;amp;approx;15 GB of messages per iteration when processing the widely-used &lt;code&gt;twitter_rv&lt;/code&gt; graph. Clearly not a good plan.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn3l&quot; name=&quot;fn3&quot;&gt;&lt;sup&gt;3&lt;/sup&gt;&lt;/a&gt; &amp;ndash; About 3 GB per iteration for each machine on the `twitter_rv` graph.
+&lt;p&gt;&lt;a href=&quot;#fn3l&quot; name=&quot;fn3&quot;&gt;&lt;sup&gt;3&lt;/sup&gt;&lt;/a&gt; – About 3 GB per iteration for each machine on the &lt;code&gt;twitter_rv&lt;/code&gt; graph.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn4l&quot; name=&quot;fn4&quot;&gt;&lt;sup&gt;4&lt;/sup&gt;&lt;/a&gt; &amp;ndash; The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.
+&lt;p&gt;&lt;a href=&quot;#fn4l&quot; name=&quot;fn4&quot;&gt;&lt;sup&gt;4&lt;/sup&gt;&lt;/a&gt; – The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn5l&quot; name=&quot;fn5&quot;&gt;&lt;sup&gt;5&lt;/sup&gt;&lt;/a&gt; &amp;ndash; We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to `m2.4xlarge` EC2 instances).
+&lt;p&gt;&lt;a href=&quot;#fn5l&quot; name=&quot;fn5&quot;&gt;&lt;sup&gt;5&lt;/sup&gt;&lt;/a&gt; – We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to &lt;code&gt;m2.4xlarge&lt;/code&gt; EC2 instances).&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn6l&quot; name=&quot;fn6&quot;&gt;&lt;sup&gt;6&lt;/sup&gt;&lt;/a&gt; &amp;ndash; You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it&#39;s because structuring the program as dataflow adds some overhead.
+&lt;p&gt;&lt;a href=&quot;#fn6l&quot; name=&quot;fn6&quot;&gt;&lt;sup&gt;6&lt;/sup&gt;&lt;/a&gt; – You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it’s because structuring the program as dataflow adds some overhead.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;a href=&quot;#fn7l&quot; name=&quot;fn7&quot;&gt;&lt;sup&gt;7&lt;/sup&gt;&lt;/a&gt; &amp;ndash; The smarter single-threaded implementation uses an &quot;exotic&quot; graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won&#39;t use it in the distributed implementation in this post.
-&lt;/div&gt;
+&lt;p&gt;&lt;a href=&quot;#fn7l&quot; name=&quot;fn7&quot;&gt;&lt;sup&gt;7&lt;/sup&gt;&lt;/a&gt; – The smarter single-threaded implementation uses an “exotic” graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won’t use it in the distributed implementation in this post.&lt;/p&gt;
 </description>
         <pubDate>Wed, 08 Jul 2015 19:00:00 +0200</pubDate>
         <link>http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html</link>

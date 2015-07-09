@@ -455,38 +455,35 @@
 
 <hr />
 
-<div style="font-size: 0.8em">
-
-<a href="#fn0l" name="fn0"><sup>0</sup></a> &ndash; This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) [indicated that](https://twitter.com/rxin/status/556365235032821760), for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That's a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that "systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine". That's a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that [systems need to be evaluated using larger graphs](http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html). In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.
+<p><a href="#fn0l" name="fn0"><sup>0</sup></a> – This view is even common with those who build distributed graph processing systems: a few months ago, Reynold Xin (GraphX co-author, now at Databricks) <a href="https://twitter.com/rxin/status/556365235032821760">indicated that</a>, for communication-bound graph workloads that fit into a machine, there is no point in going distributed. That’s a somewhat surprising position: surely, we would expect a distributed graph processing system (such as GraphX) and a decent network to outperform a laptop on graph problems? Maybe Reynold is saying that “systems like GraphX are designed for graphs that are too large to fit into a single machine; there is no benefit to using them on ones that fit into a machine”. That’s a reasonable view to take, although the fact that all known GraphX results are on such graphs suggests that <a href="http://www.frankmcsherry.org/graph/scalability/cost/2015/02/04/COST2.html">systems need to be evaluated using larger graphs</a>. In either case, we later show that a distributed system does outperform a single machine even for graphs that do fit into the machine.</p>
 
 <p></p>
 
-<a href="#fn1l" name="fn1"><sup>1</sup></a> &ndash; Some graph processing systems (e.g., [PowerGraph](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf)) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn't seem necessary, as we will see.
+<p><a href="#fn1l" name="fn1"><sup>1</sup></a> – Some graph processing systems (e.g., <a href="https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf">PowerGraph</a>) use far more complex and cunning schemes in order to balance the amount of work each worker needs to do. In practice, this doesn’t seem necessary, as we will see.</p>
 
 <p></p>
 
-<a href="#fn2l" name="fn2"><sup>2</sup></a> &ndash; If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we'd end up with each machine sending and receiving &approx;15 GB of messages per iteration when processing the widely-used `twitter_rv` graph. Clearly not a good plan.
+<p><a href="#fn2l" name="fn2"><sup>2</sup></a> – If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we’d end up with each machine sending and receiving &amp;approx;15 GB of messages per iteration when processing the widely-used <code>twitter_rv</code> graph. Clearly not a good plan.</p>
 
 <p></p>
 
-<a href="#fn3l" name="fn3"><sup>3</sup></a> &ndash; About 3 GB per iteration for each machine on the `twitter_rv` graph.
+<p><a href="#fn3l" name="fn3"><sup>3</sup></a> – About 3 GB per iteration for each machine on the <code>twitter_rv</code> graph.</p>
 
 <p></p>
 
-<a href="#fn4l" name="fn4"><sup>4</sup></a> &ndash; The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.
+<p><a href="#fn4l" name="fn4"><sup>4</sup></a> – The CamSaS cluster consists of 16 machines, each equipped with an Intel Xeon E5-2430Lv2 CPU (12 hyperthreads, 2.4 GHz), 64 GB DDR3-1600 RAM, a Micron P400m-MTF SSD for the root file system and a Toshiba MG03ACA1 7,200rpm harddrive for the data, and both an onboard 1G NIC and an Intel X520 10G NIC. We run the default Ubuntu 14.04 (trusty) Linux kernel 3.13.0-24, and the harddisk is partitioned using the ext4 file system. We use the standard Spark 1.4 distribution, which includes GraphX.</p>
 
 <p></p>
 
-<a href="#fn5l" name="fn5"><sup>5</sup></a> &ndash; We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to `m2.4xlarge` EC2 instances).
+<p><a href="#fn5l" name="fn5"><sup>5</sup></a> – We suspect that our results are slightly better than those in the GraphX paper because we use dedicated machines (as opposed to <code>m2.4xlarge</code> EC2 instances).</p>
 
 <p></p>
 
-<a href="#fn6l" name="fn6"><sup>6</sup></a> &ndash; You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it's because structuring the program as dataflow adds some overhead.
+<p><a href="#fn6l" name="fn6"><sup>6</sup></a> – You might wonder why this single-threaded measurement is slower than the simple single-threaded one from before: it’s because structuring the program as dataflow adds some overhead.</p>
 
 <p></p>
 
-<a href="#fn7l" name="fn7"><sup>7</sup></a> &ndash; The smarter single-threaded implementation uses an "exotic" graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won't use it in the distributed implementation in this post.
-</div>
+<p><a href="#fn7l" name="fn7"><sup>7</sup></a> – The smarter single-threaded implementation uses an “exotic” graph layout (based on a Hilbert space-filling curve); although this technique could be applied to timely dataflow, we won’t use it in the distributed implementation in this post.</p>
 
   </article>
 
