@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 09 Jul 2015 06:32:26 +0200</pubDate>
-    <lastBuildDate>Thu, 09 Jul 2015 06:32:26 +0200</lastBuildDate>
+    <pubDate>Thu, 09 Jul 2015 06:36:57 +0200</pubDate>
+    <lastBuildDate>Thu, 09 Jul 2015 06:36:57 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -410,7 +410,7 @@
 
 &lt;p&gt;&lt;/p&gt;
 
-&lt;p&gt;&lt;a href=&quot;#fn2l&quot; name=&quot;fn2&quot;&gt;&lt;sup&gt;2&lt;/sup&gt;&lt;/a&gt; – If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we’d end up with each machine sending and receiving &amp;amp;approx;15 GB of messages per iteration when processing the widely-used &lt;code&gt;twitter_rv&lt;/code&gt; graph. Clearly not a good plan.&lt;/p&gt;
+&lt;p&gt;&lt;a href=&quot;#fn2l&quot; name=&quot;fn2&quot;&gt;&lt;sup&gt;2&lt;/sup&gt;&lt;/a&gt; – If we represent the edge destination by a 32-bit integer and the update value by a single-precision float, we’d end up with each machine sending and receiving ~15 GB of messages per iteration when processing the widely-used &lt;code&gt;twitter_rv&lt;/code&gt; graph. Clearly not a good plan.&lt;/p&gt;
 
 &lt;p&gt;&lt;/p&gt;
 
