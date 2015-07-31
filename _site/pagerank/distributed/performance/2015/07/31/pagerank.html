@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+
+    <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width initial-scale=1">
+
+  <title>The impact of fast networks on graph analytics, part 2</title>
+  <meta name="description" content="This is a joint post with Malte Schwarzkopf, cross-blogged here and at the CamSaS blog. It follows up a previous post evaluating the impact of fast networks ...">
+
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/31/pagerank.html">
+  <link rel="alternate" type="application/atom+xml" title="Frank McSherry" href="http://www.frankmcsherry.org/feed.xml" />
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+
+  <div class="wrapper">
+
+    <a class="site-title" href="/">Frank McSherry</a>
+
+    <nav class="site-nav">
+      <a href="#" class="menu-icon">
+        <svg viewBox="0 0 18 15">
+          <path fill="#424242" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.031C17.335,0,18,0.665,18,1.484L18,1.484z"/>
+          <path fill="#424242" d="M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0c0-0.82,0.665-1.484,1.484-1.484 h15.031C17.335,6.031,18,6.696,18,7.516L18,7.516z"/>
+          <path fill="#424242" d="M18,13.516C18,14.335,17.335,15,16.516,15H1.484C0.665,15,0,14.335,0,13.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.031C17.335,12.031,18,12.696,18,13.516L18,13.516z"/>
+        </svg>
+      </a>
+
+      <div class="trigger">
+        
+          
+          <a class="page-link" href="/about/">Some Background</a>
+          
+        
+          
+        
+          
+        
+          
+        
+      </div>
+    </nav>
+
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <div class="post">
+
+  <header class="post-header">
+    <h1 class="post-title">The impact of fast networks on graph analytics, part 2</h1>
+    <p class="post-meta">Jul 31, 2015</p>
+  </header>
+
+  <article class="post-content">
+    <p>This is a joint post with <a href="http://www.cl.cam.ac.uk/~ms705/">Malte Schwarzkopf</a>, cross-blogged here and at <a href="http://www.cl.cam.ac.uk/research/srg/netos/camsas/blog/2015-07-31-timely-pagerank-part2.html">the CamSaS blog</a>. It follows up a <a href="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html">previous post</a> evaluating the impact of fast networks on graph processing systems.</p>
+
+<p>In <a href="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html">the first part</a> of this series, we have shown that some computations see large speedups when running on a faster network, illustrated by a PageRank implementation in <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a> in Rust. This seemed to run counter to the findings in a <a href="https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-ousterhout.pdf">recent NSDI paper</a> that many “big data” computations can only gain a 2-10% speedup from a faster network: although we found this to be true for the Spark/GraphX stack investigated in the paper, it did not generalize to timely dataflow.</p>
+
+<p>We are going to try to explain a bit more about <em>why</em> it doesn’t generalize: how are the systems different, and what should we learn?</p>
+
+<p>We also profile both systems to explain the differences that we observe, address some of our readers’ questions from part one, and show some further improvements we have since made.</p>
+
+<p>Finally, we return to our initial question of whether having a 10G network is beneficial. We compare process-level aggregation and worker-level aggregation at 10G: with a fast network, reducing computation and increasing communication actually helps. However, maybe a faster aggregation strategy could bring 1G to performance parity with 10G? It turns out it cannot. We show that even if aggregation was <em>infinitely</em> fast, the amount of aggregated data is still sufficiently large that sending it at 1G line rate would take longer than it takes for our 10G worker-level aggregation implementation to complete an entire PageRank iteration.</p>
+
+<p><strong>tl;dr #1</strong>: <em>GraphX spends significantly more time computing and stalled on memory accesses than it could possibly spend using the network. Timely dataflow, by comparison, let us write PageRank as a “balanced system”, bottlenecked evenly on each of its resources.</em></p>
+
+<p><strong>tl;dr #2</strong>: <em>worker-level aggregation on a 10G network is 10-20% faster than the more aggressive process-level aggregation, even though it sends significantly more data.</em></p>
+
+<p><strong>tl;dr #3</strong>: <em>a lower-bound analysis shows that even the best possible 1G implementation of process-level aggregation will be at least 2-3x slower than our 10G implementation.</em></p>
+
+<p><strong>Bonus:</strong> timely dataflow improved since we published part one, bringing the PageRank per-iteration times down to about 0.5s (from 0.7s). The PageRank code didn’t need to change to benefit. We have some of the improved numbers in paretheses, but unless otherwise mentioned the data are from the weeks-older version.</p>
+
+<h2 id="performance-comparison">Performance comparison</h2>
+
+<p>To better understand the difference between timely dataflow and GraphX, we collected some utilization data from the cluster machines while running our computations. The timelines presented in the following were recorded using the <code>collectl</code> utility, with samples taken every 100ms on each machine.</p>
+
+<h3 id="graphx">GraphX</h3>
+
+<p>Lets look at a trace of GraphX on one machine over its execution on the <code>uk_2007_05</code> graph. Different machines’ timelines can differ significantly with GraphX, so we also supply the <a href="http://www.frankmcsherry.org/assets/timeseries/pagerank/graphx_uk_16x8_10g/">graphs for all machines</a>.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/graphx_uk_16x8_10g/caelum-401.png" alt="Cluster utilization over time, GraphX 10G" /></p>
+
+<p>This is a bit hard to read; let’s zoom in to the GraphX plot a bit. We pick a 30 second range in the iteration phase (210-240s; <a href="http://www.frankmcsherry.org/assets/timeseries/pagerank/graphx_uk_16x8_10g_zoom/">graphs for all machines</a>):</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/graphx_uk_16x8_10g_zoom/caelum-401.png" alt="Cluster utilization over time, GraphX 10G, zoomed" /></p>
+
+<p>That’s a bit more readable; there are three distinct iterations clearly visible here.</p>
+
+<p>The plots tell us a bit about where GraphX’s time goes:</p>
+
+<ol>
+  <li>
+    <p>There is some idle time during each iteration, where the Spark workers wait on a few slower (or more burdened) machines (e.g. <code>caelum-302</code>). It’s also evident from the gradual drop in CPU utilization that some tasks on each machine take longer than others. This corroborates results from the NSDI paper, that Java GC can be a cause of stragglers (§5.3).</p>
+  </li>
+  <li>
+    <p>GraphX uses the disk, but not very much. In the initial phase (before iteration 1 completes), the disk I/O is composed of local reads of the input data set (each of 23 read bursts reads 1.5 GB of data). Although each worker’s data are held in memory,<a name="fn0l" href="#fn0"><sup>0</sup></a> in each iteration GraphX has two write bursts to the root filesystem SSD,<sup><a name="fn1l" href="#fn1">1</a></sup> which (as we understand it) is a consequence of Spark writing all shuffled data to disk (see §3.2 in the <a href="http://www.eecs.berkeley.edu/~keo/publications/nsdi15-final147.pdf">NSDI paper</a>).</p>
+  </li>
+  <li>
+    <p>GraphX’s memory usage is truly epic. The graph’s input edge list in ASCII is 63 total GB on disk<sup><a name="fn2l" href="#fn2">2</a></sup> and 15 GB in binary, which when partitioned should amount to less than one GB per machine across 16 machines.<sup><a name="fn3l" href="#fn3">3</a></sup> GraphX uses substantially more memory than this: its memory footprint grows to 42 GB in the load phase, and further to 50 GB during the iterations. This is possibly due to the overheads of tracking many small Java objects (a known issue, <a href="https://databricks.com/blog/2015/04/28/project-tungsten-bringing-spark-closer-to-bare-metal.html">being addressed</a> in Spark 1.5). As a result, GraphX doesn’t run on the <code>uk_2007_05</code> graph with fewer than eight of our 64 GB machines, and it doesn’t run on the <code>twitter_rv</code> graph with fewer than 16 machines.</p>
+  </li>
+  <li>
+    <p>There is some brief network traffic in each iteration, with two spikes that send and receive between 1 and 1.5 GB together. The spikes occur early in the iteration, once at the start of the first period of intense CPU use, and then again at the beginning of the second one. The computation appears to rarely be blocked on them (as observed in the NSDI paper).</p>
+  </li>
+  <li>
+    <p>Most of the time is spent with the allocated CPUs (8 out of 12) fully saturated, corroborating the NSDI paper’s finding that Spark/GraphX are mostly CPU-bound. It isn’t entirely clear to us what the GraphX computation is exactly doing with all this compute, although serialization overheads are proposed in the NSDI paper. Our later profiling results indicate that serialization is about 20% of the time, and that in addition to compute GraphX may be waiting on memory for a large fraction of time.</p>
+  </li>
+</ol>
+
+<p>Now, let’s look at the timely dataflow implementation for comparison!</p>
+
+<h3 id="timely-dataflow">Timely dataflow</h3>
+
+<p>Here is the timely dataflow trace from one machine (it is fairly representative of <a href="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g/">all 16 timely dataflow traces</a>) across its execution on the <code>uk_2007_05</code> graph:</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g/caelum-401.png" alt="Cluster utilization over time, timely dataflow, 10G" /></p>
+
+<p>Notice the timescale: in the time it takes GraphX to do three iterations above the timely dataflow implementation has <strong>started and completed the entire computation</strong>, including loading, partitioning, and sorting the edge data and running 20 iterations.<a name="fn5l" href="#fn5"><sup>5</sup></a></p>
+
+<p>The compute is much leaner here, there is very little skew (despite no cleverness in partitioning the graph, something that many papers claim is critical!), and memory utilization is just a few gigabytes (the line is hard to see as it remains below 2 GB, under 4% of the machine’s total 64 GB RAM).</p>
+
+<p>What is timely dataflow doing differently? Well, the short version is that there isn’t really all that much to do, and timely dataflow doesn’t do much more than that.</p>
+
+<p>Let’s go through the moving parts and see what has to get done.</p>
+
+<h4 id="initially-loading-up-data">Initially: loading up data</h4>
+
+<p>The computation first needs to load up and exchange the edge data, so that each worker has the edges associated with the vertices it is responsible for. There is little disk I/O in this phase as we have a hot buffer cache. Each worker then “exchanges” and sorts the edges, and gets ready to start computing.</p>
+
+<p>We put “exchanges” in quotes because each worker only loads the edges it will eventually require (and the whole dataset is on the machine already), so although they go through timely’s exchange channels, none actually reach the network in practice. If we were to send them, the 3.7B edges would require 29.7 GB on the wire, i.e., 1.86 GB on each of the 16 computers. This would take about 1.5s to exchange on a 10G link, or 15s on a 1G link.</p>
+
+<p>As the number of processes grows, the number of edges each process must exchange and sort decreases. For 1.4 billion and 3.7 billion edges, each of 16x8 = 128 workers must process roughly 11 million (<code>twitter_rv</code>) and 29 million edges (<code>uk_2007_05</code>). Exchanging and sorting these data takes each worker just a few seconds (we use a <a href="https://github.com/frankmcsherry/pagerank/blob/master/src/sorting.rs">radix sort</a>), and it could be even faster with more effort.</p>
+
+<h4 id="each-iteration-producing-sending-and-receiving-updates">Each iteration: producing, sending, and receiving updates</h4>
+
+<p>Once each worker receives the signal that there are no more edges due to arrive (a “notification” in Naiad terms), it is able to start producing rank updates for each of its edge destinations. This involves first preparing the <code>src</code> vector, by dividing each entry by its degree, scaling down by <code>alpha</code>, etc.; this is all just a linear scan through a vector, doing a few operations on each element.</p>
+
+<h4 id="producing-updates">Producing updates</h4>
+
+<p>The worker then walks sequentially through the list of edges, ordered by destination, and for each edge performs one random access into the <code>src</code> vector. These vectors are relatively compact, and get smaller proportional to the number of workers involved, hence improving locality with scale. For 61M (<code>twitter_rv</code>) and 105M (<code>uk_2007_05</code>) vertices, each worker indexes into roughly 476,000 and 820,000 elements, respectively. These aren’t huge sets, but they don’t all fit in the CPU caches. Waiting on reads from memory is one of the places that our implementation spends its time (as does GraphX, as we’ll see).</p>
+
+<h4 id="sending-updates">Sending updates</h4>
+
+<p>For each destination, the worker must also send a <code>(u32, f32)</code> pair, indicating a rank update for the relevant vertex. These are handed to the timely dataflow system, which maintains buffers for each destination. Once sufficiently many updates are at hand (or the worker finishes), the data are serialized: this is essentially a <code>memcpy</code>, as it is in many other languages that are not JVM-based (e.g., C, C++, C#), which may explain some of Spark and GraphX’s overhead. Serialized data are then put on the network by a separate thread for each socket, without blocking the worker.<sup><a name="fn6l" href="#fn6">6</a></sup></p>
+
+<h4 id="receiving-updates">Receiving updates</h4>
+
+<p>Having sent all of the necessary updates, a worker repeatedly receives updates from other workers. Each worker removes binary data from a queue shared with the networking threads, who each demultiplex data received from the network into said queue. Each worker thread deserializes the data (again, a <code>memcpy</code>), and the applies the <code>+=</code> operation indicated by the update to its <code>src</code> vector. Although the data could be arriving in any order, destinations are ordered small to large, and we might hope for good locality here.</p>
+
+<h4 id="recap">Recap</h4>
+
+<p>A distributed PageRank implementation doesn’t need to do much more than read and accumulate values for each destination, <code>memcpy</code> the results a few times, and apply the updates. Timely dataflow doesn’t really do much more than help out with this, managing the partitioning of the updates (more on this in a bit), putting bits on the wire, and coordinating the workers (telling them once they’ve received all the messages for an iteration).</p>
+
+<p>In a perfect world, timely dataflow computations are either running user code as written, or waiting on data from the network. If you get the “user code” part sorted out properly, communication is really the only thing left to improve.</p>
+
+<p>GraphX is integrated with a larger data processing stack, and expresses graph computations by iteratively repeating higher-level dataflow operations (“join” and “group by” stages, forming a triplets view; §3.2 in the <a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-gonzalez.pdf">paper</a>) and the graph as a set of parallel collections (§3.1). This approach requires a number of auxiliary data structures and makes additional passes over the data, with several optimizations aiming to reduce communication (§4.1-4.4). This, and implementation-level overheads owed to the JVM’s data representation, is a likely explanation for the memory and computation overhead it sees over timely dataflow.</p>
+
+<h3 id="profiling">Profiling</h3>
+
+<p>After that detour into how the implementations work on a conceptual level, let’s answer some more questions about the differences between GraphX and our implementation with the aid of some profiling.</p>
+
+<p>One reasonable question to ask is where the time goes in GraphX, and what could be done to reduce this overhead. To find out, we attached the <a href="https://github.com/patric-r/jvmtop">JvmTop profiler</a> to the running GraphX version of PageRank. The following snapshot is fairly representative for what we saw during the compute phase:</p>
+
+<pre><code>JvmTop 0.8.0 alpha - 09:16:33,  amd64, 12 cpus, Linux 3.13.0-24, load avg 4.59
+http://code.google.com/p/jvmtop
+
+Profiling PID 15963: org.apache.spark.executor.CoarseGrainedE
+
+57.15% (    13.14s) scala.collection.Iterator$$anon$13.hasNext()
+11.07% (     2.55s) scala.collection.Iterator$class.foreach()
+ 3.65% (     0.84s) ....esotericsoftware.kryo.serializers.FieldSerializer.ne()
+ 2.97% (     0.68s) org.xerial.snappy.SnappyNative.arrayCopy()
+ 2.80% (     0.64s) scala.collection.Iterator$$anon$11.next()
+ 2.59% (     0.59s) io.netty.channel.nio.NioEventLoop.select()
+ 2.38% (     0.55s) org.xerial.snappy.SnappyNative.rawCompress()
+ 2.18% (     0.50s) com.esotericsoftware.kryo.Kryo.readClassAndObject()
+ 1.82% (     0.42s) ....esotericsoftware.kryo.serializers.FieldSerializer.re()
+ 1.25% (     0.29s) ....esotericsoftware.kryo.util.DefaultClassResolver.read()
+ 0.95% (     0.22s) com.twitter.chill.KryoBase$$anonfun$1.apply()
+ 0.81% (     0.19s) org.xerial.snappy.SnappyNative.rawUncompress()
+ 0.80% (     0.18s) com.twitter.chill.ScalaCollectionsRegistrar.apply()
+ 0.78% (     0.18s) ....esotericsoftware.kryo.util.DefaultClassResolver.writ()
+ 0.74% (     0.17s) ....esotericsoftware.kryo.serializers.DefaultSerializers()
+ 0.73% (     0.17s) com.esotericsoftware.kryo.Kryo.newSerializer()
+ 0.66% (     0.15s) scala.collection.IndexedSeqOptimized$class.foreach()
+ 0.57% (     0.13s) ....esotericsoftware.reflectasm.AccessClassLoader.loadCl()
+ 0.46% (     0.11s) scala.collection.Iterator$$anon$11.hasNext()
+ 0.40% (     0.09s) scala.collection.immutable.Range.foreach$mVc$sp()
+</code></pre>
+
+<p>Serialization overhead <a href="http://www.cl.cam.ac.uk/research/srg/netos/camsas/blog/2015-07-08-timely-pagerank-part1.html#comment-2127472445">has been suspected</a> as the main culprit, and is certainly responsible for some of the overhead. If, as a crude approximation, we sum everything with <code>kryo</code> and <code>xerial</code> in the name above, we get 19.63% of time being devoted to serialization. (Note that garbage collection, another important factor in Spark performance, does not show up here, as JvmTop only profiles when the JVM runs user code.)</p>
+
+<p>However, a much larger fraction of time (72.54%) is spent in various Scala collection methods, with 57% of time in the <code>hasNext()</code> method of some iterator. This may be user logic (GAS vertex implementations), or edge iterators – who really knows?<a name="fn7l" href="#fn7"><sup>7</sup></a></p>
+
+<p>Additionally, one of our readers <a href="https://news.ycombinator.com/item?id=9854895">suggested</a> taking average cycle-per-instruction (CPI) measurements for GraphX and timely dataflow in order to see which system spends more time waiting on memory. We thought that was a rather nice idea, so we went and did it using the <code>perf</code> profiling tool for Linux.</p>
+
+<center>
+<table border="1" style="width:75%">
+<tr><th>Metric</th>
+<th>GraphX, 10G</th>
+<th>Timely dataflow, 10G</th>
+</tr>
+<tr><td align="right">Cycles per instruction (CPI)</td>
+<td align="right">1.95</td>
+<td align="right">1.09</td>
+</tr>
+<tr><td align="right">Stalled cycles per instruction</td>
+<td align="right">1.54</td>
+<td align="right">0.74</td>
+</tr>
+<tr><td align="right">Instructions per LLC miss</td>
+<td align="right">252</td>
+<td align="right">522</td>
+</tr>
+<caption>Performance counter profiling results.</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>The table shows what we already suspected: GraphX’s CPI is almost 2x higher than timely dataflow’s, meaning that the processor spends more time waiting on other parts of the system than actually doing work. Likewise, GraphX has a higher average number of stalled cycles per instruction, and misses in the LLC more often (about every 252 instructions <em>vs.</em> every 522 instructions in timely dataflow).</p>
+
+<p>In essence, these numbers tell us something that the CPU timeline above did not: both timely dataflow and GraphX are memory-bound on this computation (as we expected), but timely dataflow has better cache locality and thus (potentially) spends less time waiting on memory accesses.</p>
+
+<h3 id="good-news-everyone-timely-dataflow-has-got-even-faster">Good news everyone! Timely dataflow has got even faster.</h3>
+
+<p>Since we reported the results in part 1 of this series, timely dataflow has improved. Primarily, this has been about streamlining data movement, cutting out several redundant memory copies and simplifying the exchange channel logic, resulting in higher network utilization.</p>
+
+<p>Here are the utilization timelines before and after the improvements:</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g/caelum-401.png" alt="Cluster utilization over time, timely dataflow, 10G (old)" /></p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g_workeragg/caelum-401.png" alt="Cluster utilization over time, timely dataflow, 10G (improved)" /></p>
+
+<p>The second series is effectively just a compressed version of the first: the network and compute utilizations spike higher as we need less time to process the same amount of data.</p>
+
+<p>Numerically, the total and per-iteration times for 16 workers improved to 14.5s (from 19.3s) and 0.53s (from 0.75s) on the <code>twitter_rv</code> graph, and 19.1s (from 23.7s) and 0.59s (from 0.76s) on the <code>uk_2007_05</code> graph. The per-iteration times improved by 1.37x and 1.28x for the two graphs (~30%), which bump our best-case improvement over GraphX from 17x to 23x.</p>
+
+<p>We are pointing this out because we had to get some new measurements we hadn’t previous taken, and needed to re-calibrate for them. Specifically, …</p>
+
+<h3 id="process-level-vs-worker-level-aggregation-on-10g">Process-level vs. worker-level aggregation on 10G</h3>
+
+<p>As <a href="http://www.cl.cam.ac.uk/research/srg/netos/camsas/blog/2015-07-08-timely-pagerank-part1.html#comment-2153198798">one astute reader observed</a>, while we pointed out that worker-level aggregation outperforms process-level aggregation on a 10G network, we did not report the detailed numbers in part one.</p>
+
+<p>For bonus credit, we got utilization timelines for worker-level and process-level aggregation on 10G to visually present the trade-offs involved. These measurements are on the improved timely dataflow code.</p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g_workeragg/caelum-401.png" alt="Cluster utilization over time, timely dataflow, 10G (worker-level aggregation)" /></p>
+
+<p><img src="http://www.frankmcsherry.org/assets/timeseries/pagerank/timely_uk_16x8_10g_processagg/caelum-401.png" alt="Cluster utilization over time, timely dataflow, 10G+ (process-level aggregation)" /></p>
+
+<p>The process-level aggregation experiment shown in the time series shown here uses the network noticeably less than the worker-level time series does, but also takes longer because it keeps the workers busy for a bit longer on each iteration (due to the extra aggregation work). As you may remember from the first part, the worker-level aggregation strategy allows us to start sending updates as we produce them, while process-level aggregation must wait until all updates are produced.</p>
+
+<p>When we applied our trusted <code>perf</code> profiler, we found that both aggregation strategies consume about the same number of cycles, but the worker-level aggregation spends these cycles managing the additional network data on separate cores, rather than occupying the worker threads with additional aggregation. Moreover, we found that worker-level aggregation hits the last-level cache twice as often (probably due to the network threads accessing a larger working set), but it has a lower LLC miss ratio (39.6% <em>vs.</em> 47.1% for process-level aggregation). Finally, worker-level aggregation has a higher CPI (1.18) than process-level aggregation (0.99) – again, likely because of its larger working set.</p>
+
+<p>All in all, worker-level aggregation is 10-20% faster than process-level aggregation on the 10G network, but up to 4x slower on 1G (as discussed in part one). This comes despite sending more data over the network – sometimes, being more chatty actually helps!</p>
+
+<h2 id="lower-bound-analysis">Lower bound analysis</h2>
+
+<p>That process-level aggregation stuff sure seems to transmit a lot less data. Maybe if only we had worked harder to optimize the CPU use we would see a 1G network overtake the worker-level 10G implementation. Could a better implementation get closer to the 10G performance with more engineering? Yes, but not too much closer.</p>
+
+<p>Let’s reason about how fast the best possible 1G implementation could go. Due to the way we have arranged the computation, each machine must communicate at least some number of updates. Using worker-level aggregation, each process must transmit a number of updates equal to the sum of the numbers of distinct destinations for <em>each worker</em>. Using process-level aggregation, by contrast, each process must transmit a number of updates equal to the number of distinct destinations across <em>all of its workers</em>.</p>
+
+<p>This does reduce the number of required updates, but it only reduces it so much.</p>
+
+<p>Each process must transmit <em>at least</em> this smaller number of updates. The time it takes to put this data onto a 1G network is the <em>lower</em> limit on how fast it can go, even if the aggregation takes no time at all. If this lower limit ends up taking longer to send the data than a 10G implementation (spoiler: it will), we have learned something.</p>
+
+<p>Let’s look at the minimum number of updates that one specific process<sup><a name="fn8l" href="#fn8">8</a></sup> must transmit when using process-level aggregation. Each update is at least 8 bytes (a <code>u32</code> and a <code>f32</code>); divided by 1 Gb/s, we get a <em>lower bound</em> on how quickly this approach can iterate on a 1G network (assuming infinitely fast aggregation). Depending on the number of machines, this time is between 1 and 5 seconds (third column). This best-case bound is still often slower than our <em>measured</em>, real-world 10G times. If we compare the two, we get a lower bound on the speed-up from using our 10G implementation as compared to the most efficient 1G implementation possible (fourth column).<a name="fn9l" href="#fn9"><sup>9</sup></a></p>
+
+<center>
+<table border="1" style="width:75%">
+<tr><th>cores</th>
+<!-- <th>worker-level</th>  -->
+<th>updates</th>
+<th>1G lower bound</th>
+<th>1G bound / 10G measured</th>
+</tr>
+<tr><td align="right">2x8</td>
+<!-- <td align="right">126,689,200</td> -->
+<td align="right">31,215,505</td>
+<td align="right">2.00s</td>
+<td align="right">0.85x</td>
+</tr>
+<tr><td align="right">4x8</td>
+<!-- <td align="right">83,591,288</td> -->
+<td align="right">26,835,975</td>
+<td align="right">1.72s</td>
+<td align="right">1.15x</td>
+</tr>
+<tr><td align="right">8x8</td>
+<!-- <td align="right">52,899,088</td> -->
+<td align="right">22,809,014</td>
+<td align="right">1.46s</td>
+<td align="right">1.39x</td>
+</tr>
+<tr><td align="right">16x8</td>
+<!-- <td align="right">38,026,392</td> -->
+<td align="right">15,836,150</td>
+<td align="right">1.01s</td>
+<td align="right">1.35x</td>
+</tr>
+<caption> Minimum numbers of 8-byte updates process zero must send each iteration for the twitter_rv graph.</caption>
+</table>
+</center>
+
+<p></p>
+
+<center>
+<table border="1" style="width:75%">
+<tr><th>cores</th>
+<!-- <th>worker-level</th>  -->
+<th>updates</th>
+<th>1G lower bound</th>
+<th>1G bound / 10G measured</th>
+</tr>
+<tr><td align="right">2x8</td>
+<!-- <td align="right">214,935,720</td> -->
+<td align="right">75,220,268</td>
+<td align="right">4.81s</td>
+<td align="right">2.08x</td>
+</tr>
+<tr><td align="right">4x8</td>
+<!-- <td align="right">140,918,216</td> -->
+<td align="right">55,465,829</td>
+<td align="right">3.55s</td>
+<td align="right">2.30x</td>
+</tr>
+<tr><td align="right">8x8</td>
+<!-- <td align="right">88,755,160</td> -->
+<td align="right">39,443,730</td>
+<td align="right">2.52s</td>
+<td align="right">2.36x</td>
+</tr>
+<tr><td align="right">16x8</td>
+<!-- <td align="right">55,243,248</td> -->
+<td align="right">26,866,965</td>
+<td align="right"> 1.72s </td>
+<td align="right"> 2.26x </td>
+</tr>
+<caption> Minimum numbers of 8-byte updates process zero must send each iteration for the uk-2007-05 graph.</caption>
+</table>
+</center>
+
+<p></p>
+
+<p>These numbers indicate that one cannot hope to get the observed 10G performance on a 1G network just by optimizing the computation. Of course, there are other options – such as laying out the graph data along the “smarter” Hilbert-curve mentioned earlier – which we leave for another post.</p>
+
+<h2 id="how-close-to-the-metal-are-we">How “close to the metal” are we?</h2>
+
+<p>With graph processing systems, hardly a systems conference seems to go by without another paper announcing mani-fold speedups over some precursor system. How much more room is there for improvement in our code?</p>
+
+<p>First, we could change the program to look more like the <a href="http://www.frankmcsherry.org/graph/scalability/cost/2015/01/15/COST.html">smarter single-threaded code</a>, which uses a Hilbert space-filling curve to lay out the edge data. This can improve cache locality and reduce time blocked on memory reads, and can also reduce the data transmitted across the network. That would be a great thing to try out, and we will probably do that, but let’s look at some anecdotal evidence of how “close to the metal” what we already are.</p>
+
+<p>Perhaps surprisingly, one of the more expensive parts of our implementation is the division by <code>workers</code>, which each worker needs to do for each received <code>(y, update)</code> pair:</p>
+
+<div class="highlight"><pre><code class="language-rust" data-lang="rust"><span class="c1">// repeatedly receive data from other workers</span>
+<span class="k">while</span> <span class="kd">let</span> <span class="nb">Some</span><span class="p">((</span><span class="n">iter</span><span class="p">,</span> <span class="n">data</span><span class="p">))</span> <span class="o">=</span> <span class="n">input2</span><span class="p">.</span><span class="n">pull</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">notificator</span><span class="p">.</span><span class="n">notify_at</span><span class="p">(</span><span class="o">&amp;</span><span class="n">iter</span><span class="p">);</span>
+    <span class="k">for</span> <span class="n">x</span> <span class="k">in</span> <span class="n">data</span><span class="p">.</span><span class="n">drain_temp</span><span class="p">()</span> <span class="p">{</span>
+        <span class="n">src</span><span class="p">[</span><span class="n">x</span><span class="p">.</span><span class="mi">0</span> <span class="k">as</span> <span class="n">usize</span> <span class="o">/</span> <span class="n">workers</span><span class="p">]</span> <span class="o">+=</span> <span class="n">x</span><span class="p">.</span><span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span></code></pre></div>
+
+<p>If we hard-wire <code>workers</code> to a compile-time constant power of two (specifically, 16x8 = 128), the per-iteration runtime drops by about 10%, as the compiler turns the division into a shift.
+The fact that replacing arbitrary divisions with constant shifts yields such speedups likely suggests that we’re getting pretty “close to the metal”, and that relatively few other system overheads exist in our implementation.</p>
+
+<h2 id="caveats--discussion">Caveats &amp; discussion</h2>
+
+<p>This blog post would not be complete without some discussion of the caveats of what we’ve discussed – be they perceived or real. Here are some objections to our analysis that you might have.</p>
+
+<h3 id="your-approach-seems-to-require-a-lot-of-hand-coding-and-tuning-is-it-user-friendly">Your approach seems to require a lot of hand-coding and tuning; is it user-friendly?</h3>
+
+<p>If you look at <a href="https://github.com/frankmcsherry/pagerank">our code</a> one thing becomes clear: the implementation indeed looks more like a “program” than implementations for other data processing systems might. Timely dataflow mandates relatively little program structure (compared to, say, MapReduce’s or Spark’s paradigms), which gives us the flexibility to write the program as we see fit.</p>
+
+<p>This flexibility is helpful, but it comes with greater responsibility. While a programmer can more easily write performant code in timely dataflow, she can also more easily stumble into anti-patterns. GraphX’s higher-level interfaces may be the better option for writing the simplest possible programs; however, timely dataflow still maintains the core benefit of MapReduce, Spark and other parallel programming frameworks: it alleviates the user of having to implement tricky distributed coordination code, and the computational core of a PageRank implementation is <a href="https://github.com/frankmcsherry/pagerank/blob/e5ea254b1f2cb944bfc13e0b638a13c8a648662c/src/main.rs#L91-L104">pretty concise</a>.</p>
+
+<p>One could certainly write a “library” of PageRank and other graph computations atop timely dataflow, providing an appealingly simple interface to the more casual user. Timely dataflow allows the inter-operation of pre-fabricated parts (similar to Naiad vertices) with hand-rolled operators as appropriate for the computation.</p>
+
+<h3 id="doesnt-the-lack-of-fault-tolerance-mean-that-you-avoid-overhead">Doesn’t the lack of fault tolerance mean that you avoid overhead?</h3>
+
+<p>One major difference between timely dataflow and Spark/GraphX is that the latter can tolerate worker failures.<a name="fn10l" href="#fn10"><sup>10</sup></a> Fault-tolerance absolutely introduces overheads, both directly and indirectly: GraphX writes data to disk, but also needs to be structured as a stateless dataflow which prevents (or at least complicates) the maintenance of indexed in-memory state, while timely dataflow is stateful.</p>
+
+<p>A different question is whether fault-tolerance is serving its purpose here. In batch processing, fault-tolerance is fundamentally a performance optimization, meant to get you the result faster than re-running the computation from scratch. Arguably, this investment makes sense when dealing with jobs over many hours and hundreds of machines, but if the entire computation takes on the order of 20s over a handful of machines, it may not be worth it. Of course, this trade-off may chance for larger graphs and more PageRank iterations.</p>
+
+<p>That said, timely dataflow could be extended with support for fault tolerance. A blunt approach would simply check-point intermediate results (e.g., every 100 iterations). There is also <a href="https://users.soe.ucsc.edu/~abadi/Papers/many-short-revised.pdf">some existing work</a> on cleverer fault-tolerant abstractions of Naiad’s version of the timely dataflow model, and this could be applied to our implementation.</p>
+
+<h3 id="graphx-is-part-of-a-general-purpose-stack-not-a-special-purpose-graph-processing-system-isnt-this-is-a-flawed-comparison">GraphX is part of a general-purpose stack, not a special-purpose graph processing system; isn’t this is a flawed comparison?</h3>
+
+<p>We weren’t specifically trying to do a bake-off between Spark/GraphX and our code, though the observed results are a happy coincidence. Rather, we were trying to understand what is it about systems that prevent them from benefiting from modern networking kit.</p>
+
+<p>Spark and timely dataflow are both general-purpose data-parallel systems, and you can build graph processing infrastructure on either (GraphX and Naiad’s GraphLINQ, respectively). However, their relative performance reveals a bit about the properties of the underlying systems. In this work, we wrote code that fills GraphLINQ’s role atop timely dataflow in Rust (although we didn’t implement everything GraphLINQ supports).</p>
+
+<h2 id="what-about-other-state-of-the-art-systems-are-you-as-fast-as-graphlab-or-naiad">What about other state-of-the-art systems; are you as fast as GraphLab or Naiad?</h2>
+
+<p>Performance-wise, the closest competitor (and to our knowledge, the previous-best system) is Naiad, which is based on the same timely dataflow paradigm as the code presented here. Naiad runs one iteration of PageRank on the <code>twitter_rv</code> graph in &amp;approx;2s using 16 dedicated eight-core machines, and in &amp;approx;1s using 49 machines (Fig. 7(a), §6.1 in <a href="http://dl.acm.org/citation.cfm?id=2522738">the paper</a>).</p>
+
+<p>The Naiad numbers are on a 1G network, and were totally communication bound: there was about 0.15s of computation each iteration, and the rest waiting on communication. Naiad would likely see substantial improvement from a 10G network, too. We have established above that our implementation shown here cannot beat 1s on a 1G network without fundamentally changing the algorithm (Naiad used a Hilbert space-filling curve to partition the edges); on a 10G network, our best result for the same computation is 0.5s per iteration using 16 machines.</p>
+
+<p>The GraphX paper authors found its performance equal to GraphLab and Giraph; our results also beat the published numbers from these systems, though we haven’t done a deep-dive comparison against them. Our understanding is that the GraphLab numbers <a href="https://twitter.com/mejoeyg/status/623563038096949248">have improved substantially</a> from their <a href="https://www.usenix.org/system/files/conference/osdi12/osdi12-final-167.pdf">published paper</a>.</p>
+
+<h3 id="the-nsdi-paper-isnt-about-pagerank-how-does-your-analysis-apply-to-their-conclusions">The NSDI paper isn’t about PageRank; how does your analysis apply to their conclusions?</h3>
+
+<p>The NSDI paper made some specific observations, and suggested that they may generalize. Our point is that they do not generalize <em>too much</em>, and that the outcome depends on the workload, the data processing system implementation and the available hardware.</p>
+
+<p>The majority of the workloads in the NSDI paper are TPC-DS and BDBench queries, whose Spark implementations shuffle less data than they read as input. This property is one of the reasons invoked to explain why improving the exchange performance does not improve overall performance.<a name="fn11l" href="#fn11"><sup>11</sup></a></p>
+
+<p>The NSDI paper’s conclusions <em>may</em> generalize for other types of computations, but we won’t know without implementing them as well.<a name="fn12l" href="#fn12"><sup>12</sup></a> At least one <a href="http://dl.acm.org/citation.cfm?id=2750547">other paper</a> reports that for well-tuned implementations, the JOIN processing common in analytics workloads <em>should</em> be network bound, even on an Infiniband network.</p>
+
+<h2 id="lessons-learned">Lessons learned</h2>
+
+<p>To finish up, let’s recap what we’ve learned.</p>
+
+<ol>
+  <li><strong>Computers are surprisingly fast!</strong></li>
+</ol>
+
+<p>Modern hardware can do quite a lot of work in a short time – for example, it can iterate over 3 billion edges and exchange hundreds of millions of updates in less than a second. However, to get this performance, it is necessarily to carefully think about how every layer of the system works. Our ability to speed up PageRank by up to 16x (or 23x, with the new numbers) suggests that there’s still a fair bit of this kind of optimization to be had in distributed data processing systems.</p>
+
+<ol>
+  <li><strong>Faster networks <em>can</em> help, and they influence implementations.</strong></li>
+</ol>
+
+<p>Strategies that are helpful on a (slow) 1G network, such as process-level aggregation, can actually be <em>harmful</em> on a faster 10G network.
+ Spark and GraphX are examples of systems designed with the assumption that I/O is slow, and that doing extra computing to reduce the I/O required is always beneficial. As we’ve shown with the aggregation strategies, this is not necessarily the case. This motivates thinking about whether we need systems capable of dynamically adapting their strategies to the hardware they’re running on.</p>
+
+<ol>
+  <li><strong>Distributed processing <em>does</em> help even communication-heavy graph workloads.</strong></li>
+</ol>
+
+<p>Our best distributed PageRank is 11x faster than even the smart, Hilbert-curve-based single-threaded implementation (now 13.4x), and 5x faster than our best multi-threaded, single machine implementation. In other words, even communication-heavy workloads on data sets that fit into a single machine can get significant benefit from a distributed implementation, provided it makes good use of available system resources.</p>
+
+<ol>
+  <li><strong>Balanced system design is key.</strong></li>
+</ol>
+
+<p>Our implementation overlaps communication and computation, stressing CPU and network resources roughly equally. In general, when adding to one resource failed to deliver speedups, we could realize them by improving on another: when we found that network utilization was uneven, we improved it by re-structuring the computation to overlap communication more, and when computation became a bottleneck, we reduced it by communicating more data. The goal should be a system in which improving any single resource won’t yield a speedup on its own. Spark/GraphX, by comparison, looks highly CPU-bound, and needs some heavy optimization before becoming network-bound.</p>
+
+<ol>
+  <li><strong>Timely dataflow is quite a neat paradigm.</strong></li>
+</ol>
+
+<p>A lot of our freedom to optimize things is owed to the flexibility of timely dataflow, which only mandates some very light progress tracking, and that workers respect the promise to send no more data for a timestamp after it has been “notified”. Since this paradigm does not mandate many <em>implementation choices</em>, we are able to implement things such that all system resources are best utilized at all times.</p>
+
+<p>While our timely dataflow implementation surely isn’t the last word in graph processing, it really is pretty simple, it gets the job done, and it goes pretty fast. You could certainly improve many of the implementation choices we made, or do something totally new, different and better! It really isn’t that hard to write this stuff, and we’d love to see more people doing inventive work rather than doing minor tweaks to existing monolithic stacks.</p>
+
+<p>Maybe let’s all agree that we can stop talking so much about numbers that are slower than those above, and focus our attention on how to build things that are better.</p>
+
+<hr />
+
+<p><a href="#fn0l" name="fn0"><sup>0</sup></a> – GraphX’s default “storage level” for the edge and vertex RDDs is <code>MEMORY_ONLY</code> (see <a href="https://github.com/apache/spark/blob/branch-1.4/graphx/src/main/scala/org/apache/spark/graphx/Graph.scala#L525">here</a>), and we use the default settings.</p>
+
+<p><a href="#fn1l" name="fn1"><sup>1</sup></a> – This is because Spark by default uses <code>/tmp</code> for its local intermediate storage (the <code>SPARK_LOCAL_DIRS</code> environment variable); <a href="https://spark.apache.org/docs/1.4.0/configuration.html">as recommended</a>, this is located on the SSD in our setup. The input data set, however, is on a spinning disk, as the SSD is not large enough to hold it (hence the “low” utilization in the load phase).</p>
+
+<p><a href="#fn2l" name="fn2"><sup>2</sup></a> – The ASCII edge list representation is actually a tremendously wasteful representation of the graph. For timely dataflow, we use a binary adjacency list representation that stores the same graph in 15 GB (4.2x more efficient). GraphX could, of course, use the same binary representation (but the <code>GraphLoader</code> class used by the canonical PageRank example assumes an ASCII edge list). This difference – and any one-off transformation into binary – only affects the one-off startup cost, however, and has no impact on the per-iteration runtime (as by then, the graph is stored as binary integers in memory).</p>
+
+<p><a href="#fn3l" name="fn3"><sup>3</sup></a> – Our binary representation uses 32-bit unsigned values, which are sufficient for the graphs we study (just). Larger graphs require 64-bit values, but should still remain within 4 GB of working set per machine. Moreover, using 64-bit values potentially increases the amount of network traffic required, which would exacerbate our findings.<sup><a name="fn4l" href="#fn4">4</a></sup></p>
+
+<p><a href="#fn4l" name="fn4"><sup>4</sup></a> – Frank doesn’t like footnotes. Malte did this to you.</p>
+
+<p><a href="#fn5l" name="fn5"><sup>5</sup></a> – You might wonder why our load phase is much shorter, and why there’s little disk activity: this is because we ran all of our experiments on a hot buffer cache (i.e., having run the computation before to warm it up). GraphX does not seem to benefit much from this, which may be because its large runtime memory consumption ends up evicting most of cached data before the computation completes. However, even paging the data from a cold buffer cache ends up taking only tens of seconds, since each worker only reads less than 1 GB.</p>
+
+<p><a href="#fn6l" name="fn6"><sup>6</sup></a> – The network threads are the reason why we allocated only eight cores per machine to the compute workers; however, as the timeline shows, we actually still have some CPU headroom.</p>
+
+<p><a href="#fn7l" name="fn7"><sup>7</sup></a> – Footnote 7 was removed, but renumbering in HTML is too painful.<sup><a name="fn7l" href="#fn7">7</a></sup></p>
+
+<p><a href="#fn8l" name="fn8"><sup>8</sup></a> – We show numbers from process 0 here, but the numbers for others are similar.</p>
+
+<p><a href="#fn9l" name="fn9"><sup>9</sup></a> – We use our older, slower numbers to avoid re-running everything with the new code; the ratios would only improve with our newer numbers.</p>
+
+<p><a href="#fn10l" name="fn10"><sup>10</sup></a> – Although when Spark workers failed due to running out of memory in our experiments, the PageRank computation did not seem to recover: it spun on the same execution stage for 30 minutes before we terminated the job.</p>
+
+<p><a href="#fn11l" name="fn11"><sup>11</sup></a> – Incidentally, this property is true of the GraphX PageRank too for up to three iterations: for the <code>uk_2007_05</code> graph, it reads 63 GB of ASCII text, and then shuffles 23.8 GB of data per iteration. This does, however, illustrate a potential pitfall with the use of “input bytes” as a metric: the same input data can be represent at very different levels of efficiency, and may yet still result in the same runtime shuffle size. As we discussed in footnote 3, the input size can be reduced significantly by using a binary representation, without affecting the shuffle size.</p>
+
+<p><a href="#fn12l" name="fn12"><sup>12</sup></a> – We implemented <a href="https://github.com/frankmcsherry/differential-dataflow/blob/cde516fd27255dac13ce7a76c2dc1e93b6041b00/examples/tpch17.rs#L40-L80">TPC-H query 17</a> in timely dataflow to show that it can be done, and it went quite fast when we tested it. However, we haven’t done a detailed evaluation of it.</p>
+
+  </article>
+
+</div>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Frank McSherry</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col  footer-col-1">
+        <ul class="contact-list">
+          <li>Frank McSherry</li>
+          <li><a href="mailto:mcsherry@gmail.com">mcsherry@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/frankmcsherry">
+              <span class="icon  icon--github">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/frankmcsherry">
+              <span class="icon  icon--twitter">
+                <svg viewBox="0 0 16 16">
+                  <path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809
+                  c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/>
+                </svg>
+              </span>
+
+              <span class="username">frankmcsherry</span>
+            </a>
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col  footer-col-3">
+        <p class="text">Some notes on doing less of what I used to do, and more of what I'd rather be doing.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+
+  </body>
+
+</html>
