@@ -5,8 +5,8 @@
     <description>Some notes on doing less of what I used to do, and more of what I&#39;d rather be doing.</description>
     <link>http://www.frankmcsherry.org/</link>
     <atom:link href="http://www.frankmcsherry.org/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 31 Jul 2015 21:54:42 +0200</pubDate>
-    <lastBuildDate>Fri, 31 Jul 2015 21:54:42 +0200</lastBuildDate>
+    <pubDate>Fri, 31 Jul 2015 21:56:54 +0200</pubDate>
+    <lastBuildDate>Fri, 31 Jul 2015 21:56:54 +0200</lastBuildDate>
     <generator>Jekyll v2.5.2</generator>
     
       <item>
@@ -401,6 +401,8 @@ The fact that replacing arbitrary divisions with constant shifts yields such spe
 &lt;ol&gt;
   &lt;li&gt;&lt;strong&gt;Markdown is pretty shit at getting enumerated lists right, even when I supply the numbers.&lt;/strong&gt;&lt;/li&gt;
 &lt;/ol&gt;
+
+&lt;p&gt;That one is a bonus lesson learned.&lt;/p&gt;
 
 &lt;p&gt;While our timely dataflow implementation surely isn’t the last word in graph processing, it really is pretty simple, it gets the job done, and it goes pretty fast. You could certainly improve many of the implementation choices we made, or do something totally new, different and better! It really isn’t that hard to write this stuff, and we’d love to see more people doing inventive work rather than doing minor tweaks to existing monolithic stacks.&lt;/p&gt;
 
